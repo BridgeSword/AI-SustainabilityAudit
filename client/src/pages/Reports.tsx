@@ -1,263 +1,92 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Navigation from "@/components/layout/Navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { FileText, Plus, Upload } from "lucide-react";
+import { createReport, listCompanies, listReports, uploadReportPdf, type ApiReport } from "@/lib/api";
 
-interface Company {
-  id: string;
-  name: string;
-}
-
-interface Report {
-  id: string;
-  report_year: number;
-  ghg_emissions: number | null;
-  file_name: string | null;
-  file_url: string | null;
-  companies: {
-    name: string;
-  };
-}
+interface Company { id: number; name: string; }
+interface ReportView { id: number; report_year: number; ghg_emissions: number | null; company_id: number | null; company_name: string; }
 
 const Reports = () => {
   const [searchParams] = useSearchParams();
   const [companies, setCompanies] = useState<Company[]>([]);
-  const [reports, setReports] = useState<Report[]>([]);
+  const [reports, setReports] = useState<ReportView[]>([]);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [formData, setFormData] = useState({
-    company_id: searchParams.get("company") || "",
-    report_year: new Date().getFullYear(),
-    ghg_emissions: "",
-  });
+  const [formData, setFormData] = useState({ company_id: searchParams.get("company") || "", report_year: new Date().getFullYear(), ghg_emissions: "" });
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchCompanies();
-    fetchReports();
-  }, []);
+  const companyMap = useMemo(() => new Map(companies.map((c) => [c.id, c.name])), [companies]);
 
-  const fetchCompanies = async () => {
-    const { data } = await supabase.from("companies").select("id, name").order("name");
-    setCompanies(data || []);
-  };
+  useEffect(() => { void fetchData(); }, []);
 
-  const fetchReports = async () => {
-    const { data } = await supabase
-      .from("sustainability_reports")
-      .select(`
-        *,
-        companies(name)
-      `)
-      .order("report_year", { ascending: false });
+  const toReportView = (report: ApiReport): ReportView => ({
+    id: report.id,
+    report_year: report.year,
+    ghg_emissions: Number(report.extracted_json?.ghg_emissions) || null,
+    company_id: report.company_id,
+    company_name: report.company_id ? companyMap.get(report.company_id) || `Company #${report.company_id}` : "Unknown Company",
+  });
 
-    setReports(data as any || []);
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
+  const fetchData = async () => {
+    try {
+      const [companiesData, reportsData] = await Promise.all([listCompanies(), listReports()]);
+      const normalizedCompanies = companiesData.map((c) => ({ id: c.id, name: c.name }));
+      const map = new Map(normalizedCompanies.map((c) => [c.id, c.name]));
+      setCompanies(normalizedCompanies);
+      setReports(reportsData.map((r) => ({
+        id: r.id,
+        report_year: r.year,
+        ghg_emissions: Number(r.extracted_json?.ghg_emissions) || null,
+        company_id: r.company_id,
+        company_name: r.company_id ? map.get(r.company_id) || `Company #${r.company_id}` : "Unknown Company",
+      })));
+    } catch (error) {
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to load data", variant: "destructive" });
     }
   };
+
+  const filteredReports = useMemo(() => {
+    const companyIdFilter = searchParams.get("company");
+    return reports.filter((r) => !companyIdFilter || r.company_id?.toString() === companyIdFilter);
+  }, [reports, searchParams]);
 
   const handleAddReport = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.company_id) return;
 
-    let fileUrl = null;
-    let fileName = null;
+    try {
+      const report = await createReport({
+        company_id: parseInt(formData.company_id, 10),
+        year: formData.report_year,
+        extracted_json: {
+          ghg_emissions: formData.ghg_emissions ? parseFloat(formData.ghg_emissions) : null,
+          file_name: selectedFile?.name ?? null,
+        },
+      });
 
-    if (selectedFile) {
-      const fileExt = selectedFile.name.split(".").pop();
-      const filePath = `${formData.company_id}/${formData.report_year}.${fileExt}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("sustainability-reports")
-        .upload(filePath, selectedFile, { upsert: true });
-
-      if (uploadError) {
-        toast({
-          title: "Error",
-          description: "Failed to upload file",
-          variant: "destructive",
-        });
-        return;
+      if (selectedFile) {
+        await uploadReportPdf(report.id, selectedFile);
       }
 
-      const { data: urlData } = supabase.storage
-        .from("sustainability-reports")
-        .getPublicUrl(filePath);
-
-      fileUrl = urlData.publicUrl;
-      fileName = selectedFile.name;
+      toast({ title: "Success", description: "Report added successfully" });
+      setFormData({ company_id: "", report_year: new Date().getFullYear(), ghg_emissions: "" });
+      setSelectedFile(null);
+      setIsDialogOpen(false);
+      await fetchData();
+    } catch (error) {
+      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to add report", variant: "destructive" });
     }
-
-    const { error } = await supabase.from("sustainability_reports").insert([
-      {
-        company_id: formData.company_id,
-        report_year: formData.report_year,
-        ghg_emissions: formData.ghg_emissions ? parseFloat(formData.ghg_emissions) : null,
-        file_url: fileUrl,
-        file_name: fileName,
-      },
-    ]);
-
-    if (error) {
-      toast({
-        title: "Error",
-        description: error.message,
-        variant: "destructive",
-      });
-      return;
-    }
-
-    toast({
-      title: "Success",
-      description: "Report added successfully",
-    });
-
-    setFormData({ company_id: "", report_year: new Date().getFullYear(), ghg_emissions: "" });
-    setSelectedFile(null);
-    setIsDialogOpen(false);
-    fetchReports();
   };
 
-  return (
-    <div className="min-h-screen bg-background">
-      <Navigation />
-      
-      <main className="container mx-auto px-4 py-8">
-        <div className="mb-8 flex items-center justify-between">
-          <div>
-            <h1 className="text-4xl font-bold text-foreground mb-2">Sustainability Reports</h1>
-            <p className="text-muted-foreground">Upload and manage sustainability reports</p>
-          </div>
-          
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button className="gap-2">
-                <Plus className="h-4 w-4" />
-                Add Report
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Add New Report</DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleAddReport} className="space-y-4">
-                <div>
-                  <Label htmlFor="company">Company *</Label>
-                  <Select
-                    value={formData.company_id}
-                    onValueChange={(value) => setFormData({ ...formData, company_id: value })}
-                    required
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a company" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {companies.map((company) => (
-                        <SelectItem key={company.id} value={company.id}>
-                          {company.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="year">Report Year *</Label>
-                  <Input
-                    id="year"
-                    type="number"
-                    value={formData.report_year}
-                    onChange={(e) => setFormData({ ...formData, report_year: parseInt(e.target.value) })}
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="emissions">GHG Emissions (tCO₂e)</Label>
-                  <Input
-                    id="emissions"
-                    type="number"
-                    step="0.01"
-                    value={formData.ghg_emissions}
-                    onChange={(e) => setFormData({ ...formData, ghg_emissions: e.target.value })}
-                    placeholder="e.g., 125000"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="file">Upload Report File</Label>
-                  <div className="mt-2">
-                    <Input
-                      id="file"
-                      type="file"
-                      onChange={handleFileChange}
-                      accept=".pdf,.doc,.docx,.xls,.xlsx"
-                    />
-                  </div>
-                  {selectedFile && (
-                    <p className="text-sm text-muted-foreground mt-2">
-                      Selected: {selectedFile.name}
-                    </p>
-                  )}
-                </div>
-                <Button type="submit" className="w-full gap-2">
-                  <Upload className="h-4 w-4" />
-                  Add Report
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
-        </div>
-
-        <div className="grid gap-4">
-          {reports.map((report) => (
-            <Card key={report.id}>
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-                      <FileText className="h-6 w-6 text-primary" />
-                    </div>
-                    <div>
-                      <CardTitle>{report.companies.name} - {report.report_year}</CardTitle>
-                      <CardDescription>
-                        {report.ghg_emissions 
-                          ? `${report.ghg_emissions.toLocaleString()} tCO₂e` 
-                          : "No emissions data"}
-                      </CardDescription>
-                    </div>
-                  </div>
-                  {report.file_url && (
-                    <Button variant="outline" asChild>
-                      <a href={report.file_url} target="_blank" rel="noopener noreferrer">
-                        View File
-                      </a>
-                    </Button>
-                  )}
-                </div>
-              </CardHeader>
-            </Card>
-          ))}
-        </div>
-
-        {reports.length === 0 && (
-          <div className="text-center py-12">
-            <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <p className="text-lg text-muted-foreground">No reports found</p>
-            <p className="text-sm text-muted-foreground mb-4">Add a report to get started</p>
-          </div>
-        )}
-      </main>
-    </div>
-  );
+  return <div className="min-h-screen bg-background"><Navigation /><main className="container mx-auto px-4 py-8"><div className="mb-8 flex items-center justify-between"><div><h1 className="text-4xl font-bold text-foreground mb-2">Sustainability Reports</h1><p className="text-muted-foreground">Upload and manage sustainability reports</p></div><Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}><DialogTrigger asChild><Button className="gap-2"><Plus className="h-4 w-4" />Add Report</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>Add New Report</DialogTitle></DialogHeader><form onSubmit={handleAddReport} className="space-y-4"><div><Label htmlFor="company">Company *</Label><Select value={formData.company_id} onValueChange={(value) => setFormData({ ...formData, company_id: value })} required><SelectTrigger><SelectValue placeholder="Select a company" /></SelectTrigger><SelectContent>{companies.map((company) => <SelectItem key={company.id} value={company.id.toString()}>{company.name}</SelectItem>)}</SelectContent></Select></div><div><Label htmlFor="year">Report Year *</Label><Input id="year" type="number" value={formData.report_year} onChange={(e) => setFormData({ ...formData, report_year: parseInt(e.target.value, 10) })} required /></div><div><Label htmlFor="emissions">GHG Emissions (tCO₂e)</Label><Input id="emissions" type="number" step="0.01" value={formData.ghg_emissions} onChange={(e) => setFormData({ ...formData, ghg_emissions: e.target.value })} /></div><div><Label htmlFor="file">Upload PDF (optional)</Label><Input id="file" type="file" onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} accept="application/pdf,.pdf" />{selectedFile && <p className="text-sm text-muted-foreground mt-2">Selected: {selectedFile.name}</p>}</div><Button type="submit" className="w-full gap-2"><Upload className="h-4 w-4" />Add Report</Button></form></DialogContent></Dialog></div><div className="grid gap-4">{filteredReports.map((report) => <Card key={report.id}><CardHeader><CardTitle>{report.company_name} - {report.report_year}</CardTitle><CardDescription>{report.ghg_emissions ? `${report.ghg_emissions.toLocaleString()} tCO₂e` : "No emissions data"}</CardDescription></CardHeader></Card>)}</div></main></div>;
 };
 
 export default Reports;

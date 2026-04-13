@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.dist/
+.build/
+.venv/
+.env
+
+# Jupyter / IDE
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Your runtime artifacts
+runs/
+web_api/runs/
+**/uploads/
+*.pdf
+*.json
+
+# Logs
+*.log
+# installers / large binaries
+miniconda.sh
+miniconda*.sh

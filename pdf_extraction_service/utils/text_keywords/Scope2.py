@@ -1,0 +1,2 @@
+REGEX_PATTERN=r"scope\s2"
+QUERIES=[]

@@ -4,35 +4,59 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Plus, FolderOpen, Search, ArrowUpDown } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import Navigation from "@/components/layout/Navigation";
 import SectorRankingChat from "@/components/sector-ranking/SectorRankingChat";
+import {
+  createCompany,
+  createReport,
+  listCompanies,
+  listReports,
+  uploadReportPdf,
+} from "@/lib/api";
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:9092").replace(/\/$/, "");
 
 interface Company {
-  id: string;
+  id: number;
   name: string;
   industry: string | null;
 }
 
 interface Report {
-  id: string;
+  id: number;
   report_year: number;
   file_name: string | null;
-  file_url: string | null;
-  company_id: string;
+  company_id: number;
+  report_data?: any;
+  extraction_status?: string | null;
+  scoring_status?: string | null;
+  anomaly_status?: string | null;
 }
 
 const InnovativeActionDetect = () => {
   const { companyId } = useParams<{ companyId: string }>();
+  const numericCompanyId = companyId ? Number(companyId) : null;
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  // State for company list view
   const [companies, setCompanies] = useState<Company[]>([]);
   const [companySearch, setCompanySearch] = useState("");
   const [isLoadingCompanies, setIsLoadingCompanies] = useState(true);
@@ -40,56 +64,56 @@ const InnovativeActionDetect = () => {
   const [newCompanyName, setNewCompanyName] = useState("");
   const [newCompanyIndustry, setNewCompanyIndustry] = useState("");
 
-  // State for report list view
   const [reports, setReports] = useState<Report[]>([]);
   const [reportSearch, setReportSearch] = useState("");
   const [sortAscending, setSortAscending] = useState(false);
   const [isLoadingReports, setIsLoadingReports] = useState(false);
   const [addReportOpen, setAddReportOpen] = useState(false);
   const [newReportYear, setNewReportYear] = useState("");
-  const [newReportName, setNewReportName] = useState("");
   const [selectedCompany, setSelectedCompany] = useState<Company | null>(null);
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
-  // External context for AI chat
+  const [analysisOpen, setAnalysisOpen] = useState(false);
+
+  const [isUploadingReport, setIsUploadingReport] = useState(false);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const [currentJobStatus, setCurrentJobStatus] = useState<string | null>(null);
+
   const [externalContext, setExternalContext] = useState<any>({});
 
-  // Fetch companies
   useEffect(() => {
-    fetchCompanies();
+    void fetchCompanies();
   }, []);
 
-  // Fetch reports when companyId changes
   useEffect(() => {
-    if (companyId) {
-      fetchReports(companyId);
-      fetchCompanyDetails(companyId);
+    if (numericCompanyId) {
+      void fetchReports(numericCompanyId);
+      setSelectedCompany(companies.find((c) => c.id === numericCompanyId) || null);
     }
-  }, [companyId]);
+  }, [numericCompanyId, companies, sortAscending]);
 
-  // Update external context when company or report changes
   useEffect(() => {
     setExternalContext({
-      view: companyId ? "reports" : "companies",
+      view: numericCompanyId ? "reports" : "companies",
       selectedCompany,
       selectedReport,
-      reports: companyId ? reports : undefined,
+      reports: numericCompanyId ? reports : undefined,
     });
-  }, [companyId, selectedCompany, selectedReport, reports]);
+  }, [numericCompanyId, selectedCompany, selectedReport, reports]);
 
   const fetchCompanies = async () => {
     setIsLoadingCompanies(true);
     try {
-      const { data, error } = await supabase
-        .from("companies")
-        .select("*")
-        .order("name");
-
-      if (error) throw error;
-      setCompanies(data || []);
-    } catch (error) {
-      console.error("Error fetching companies:", error);
+      const data = await listCompanies();
+      setCompanies(
+        data.map((c) => ({
+          id: c.id,
+          name: c.name,
+          industry: c.sector,
+        }))
+      );
+    } catch {
       toast({
         title: "Error",
         description: "Failed to load companies",
@@ -100,34 +124,28 @@ const InnovativeActionDetect = () => {
     }
   };
 
-  const fetchCompanyDetails = async (id: string) => {
-    try {
-      const { data, error } = await supabase
-        .from("companies")
-        .select("*")
-        .eq("id", id)
-        .single();
-
-      if (error) throw error;
-      setSelectedCompany(data);
-    } catch (error) {
-      console.error("Error fetching company details:", error);
-    }
-  };
-
-  const fetchReports = async (id: string) => {
+  const fetchReports = async (id: number) => {
     setIsLoadingReports(true);
     try {
-      const { data, error } = await supabase
-        .from("sustainability_reports")
-        .select("*")
-        .eq("company_id", id)
-        .order("report_year", { ascending: sortAscending });
+      const data = await listReports();
+      const filtered = data
+        .filter((r) => r.company_id === id)
+        .map((r) => ({
+          id: r.id,
+          report_year: r.year,
+          file_name: (r.extracted_json?.file_name as string) || `Report ${r.year}`,
+          company_id: r.company_id || id,
+          report_data: r.extracted_json,
+          extraction_status: r.extraction_status,
+          scoring_status: r.scoring_status,
+          anomaly_status: r.anomaly_status,
+        }))
+        .sort((a, b) =>
+          sortAscending ? a.report_year - b.report_year : b.report_year - a.report_year
+        );
 
-      if (error) throw error;
-      setReports(data || []);
-    } catch (error) {
-      console.error("Error fetching reports:", error);
+      setReports(filtered);
+    } catch {
       toast({
         title: "Error",
         description: "Failed to load reports",
@@ -140,20 +158,18 @@ const InnovativeActionDetect = () => {
 
   const handleAddCompany = async () => {
     if (!newCompanyName.trim()) {
-      toast({
+      return toast({
         title: "Validation Error",
         description: "Company name is required",
         variant: "destructive",
       });
-      return;
     }
 
     try {
-      const { error } = await supabase
-        .from("companies")
-        .insert([{ name: newCompanyName, industry: newCompanyIndustry || null }]);
-
-      if (error) throw error;
+      await createCompany({
+        name: newCompanyName,
+        sector: newCompanyIndustry || null,
+      });
 
       toast({
         title: "Success",
@@ -163,9 +179,8 @@ const InnovativeActionDetect = () => {
       setAddCompanyOpen(false);
       setNewCompanyName("");
       setNewCompanyIndustry("");
-      fetchCompanies();
-    } catch (error) {
-      console.error("Error adding company:", error);
+      await fetchCompanies();
+    } catch {
       toast({
         title: "Error",
         description: "Failed to add company",
@@ -174,88 +189,107 @@ const InnovativeActionDetect = () => {
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
+  const pollUploadJob = async (jobId: string, reportId: number) => {
+    const maxAttempts = 60;
+
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      const res = await fetch(`${API_BASE_URL}/pdf/v1/jobs/${jobId}/status?report_id=${reportId}`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data?.detail || "Failed to check PDF extraction status");
+      }
+
+      const status = data.status || data.raw_status?.state || "processing";
+      setCurrentJobStatus(status);
+
+      if (status === "completed" || status === "done" || status === "success" || status === "finished") {
+        return;
+      }
+
+      if (status === "failed" || status === "error") {
+        throw new Error("PDF extraction failed.");
+      }
     }
+
+    throw new Error("PDF extraction timed out.");
   };
 
   const handleAddReport = async () => {
-    if (!newReportYear || !companyId) {
-      toast({
+    if (!newReportYear || !numericCompanyId) {
+      return toast({
         title: "Validation Error",
         description: "Year is required",
         variant: "destructive",
       });
-      return;
     }
 
     try {
-      let fileUrl = null;
-      let fileName = null;
+      setIsUploadingReport(true);
+      setCurrentJobId(null);
+      setCurrentJobStatus("creating");
+
+      const report = await createReport({
+        company_id: numericCompanyId,
+        year: parseInt(newReportYear, 10),
+        extracted_json: {
+          file_name: selectedFile?.name || `Report ${newReportYear}`,
+        },
+      });
 
       if (selectedFile) {
-        const fileExt = selectedFile.name.split(".").pop();
-        const filePath = `${companyId}/${newReportYear}.${fileExt}`;
+        const uploadResp = await uploadReportPdf(report.id, selectedFile);
+        const jobId = uploadResp.job_id;
 
-        const { error: uploadError } = await supabase.storage
-          .from("sustainability-reports")
-          .upload(filePath, selectedFile, { upsert: true });
+        setCurrentJobId(jobId);
+        setCurrentJobStatus("processing");
 
-        if (uploadError) {
-          toast({
-            title: "Error",
-            description: "Failed to upload file",
-            variant: "destructive",
-          });
-          return;
-        }
+        toast({
+          title: "Processing started",
+          description: "PDF uploaded. Waiting for extraction result...",
+        });
 
-        const { data: urlData } = supabase.storage
-          .from("sustainability-reports")
-          .getPublicUrl(filePath);
-
-        fileUrl = urlData.publicUrl;
-        fileName = selectedFile.name;
+        await pollUploadJob(jobId, report.id);
       }
-
-      const { error } = await supabase
-        .from("sustainability_reports")
-        .insert([{
-          company_id: companyId,
-          report_year: parseInt(newReportYear),
-          file_name: fileName || newReportName || `Report ${newReportYear}`,
-          file_url: fileUrl,
-        }]);
-
-      if (error) throw error;
 
       toast({
         title: "Success",
-        description: "Report added successfully",
+        description: "Report added and processed successfully",
       });
 
       setAddReportOpen(false);
       setNewReportYear("");
-      setNewReportName("");
       setSelectedFile(null);
-      fetchReports(companyId);
+      setCurrentJobId(null);
+      setCurrentJobStatus(null);
+
+      await fetchReports(numericCompanyId);
     } catch (error) {
-      console.error("Error adding report:", error);
       toast({
         title: "Error",
-        description: "Failed to add report",
+        description: error instanceof Error ? error.message : "Failed to add report",
         variant: "destructive",
       });
+    } finally {
+      setIsUploadingReport(false);
     }
   };
 
   const handleAnalyze = (report: Report) => {
     setSelectedReport(report);
-    toast({
-      title: "Analysis Started",
-      description: "Report sent to AI for analysis. Check the chat on the right for results.",
-    });
+
+    if (!report.report_data || report.extraction_status !== "completed") {
+      toast({
+        title: "Not ready yet",
+        description: "This report has not finished PDF extraction yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setAnalysisOpen(true);
   };
 
   const filteredCompanies = companies.filter((company) =>
@@ -266,24 +300,20 @@ const InnovativeActionDetect = () => {
     (report.file_name || "").toLowerCase().includes(reportSearch.toLowerCase())
   );
 
-  useEffect(() => {
-    if (companyId) {
-      fetchReports(companyId);
-    }
-  }, [sortAscending]);
-
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
+
       <div className="container mx-auto px-4 py-8">
         <div className="flex gap-6">
-          {/* Left side - Company/Report List */}
           <div className="flex-1">
-            {!companyId ? (
-              // Company List View
+            {!numericCompanyId ? (
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <h1 className="text-3xl font-bold text-foreground">Innovative Action Detect</h1>
+                  <h1 className="text-3xl font-bold text-foreground">
+                    Innovative Action Detect
+                  </h1>
+
                   <Dialog open={addCompanyOpen} onOpenChange={setAddCompanyOpen}>
                     <DialogTrigger asChild>
                       <Button className="flex items-center gap-2">
@@ -291,27 +321,23 @@ const InnovativeActionDetect = () => {
                         Add Company
                       </Button>
                     </DialogTrigger>
+
                     <DialogContent>
                       <DialogHeader>
                         <DialogTitle>Add New Company</DialogTitle>
                       </DialogHeader>
+
                       <div className="space-y-4 py-4">
-                        <div>
-                          <label className="text-sm font-medium text-foreground">Company Name</label>
-                          <Input
-                            value={newCompanyName}
-                            onChange={(e) => setNewCompanyName(e.target.value)}
-                            placeholder="Enter company name"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-sm font-medium text-foreground">Industry (Optional)</label>
-                          <Input
-                            value={newCompanyIndustry}
-                            onChange={(e) => setNewCompanyIndustry(e.target.value)}
-                            placeholder="Enter industry"
-                          />
-                        </div>
+                        <Input
+                          value={newCompanyName}
+                          onChange={(e) => setNewCompanyName(e.target.value)}
+                          placeholder="Company name"
+                        />
+                        <Input
+                          value={newCompanyIndustry}
+                          onChange={(e) => setNewCompanyIndustry(e.target.value)}
+                          placeholder="Industry"
+                        />
                         <Button onClick={handleAddCompany} className="w-full">
                           Add Company
                         </Button>
@@ -332,36 +358,39 @@ const InnovativeActionDetect = () => {
 
                 <ScrollArea className="h-[calc(100vh-16rem)]">
                   <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {isLoadingCompanies ? (
-                      Array.from({ length: 6 }).map((_, i) => (
-                        <Skeleton key={i} className="h-32" />
-                      ))
-                    ) : (
-                      filteredCompanies.map((company) => (
-                        <Card
-                          key={company.id}
-                          className="p-6 cursor-pointer hover:bg-accent transition-colors"
-                          onClick={() => navigate(`/innovative-action-detect/${company.id}`)}
-                        >
-                          <div className="flex items-center gap-4">
-                            <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-                              <FolderOpen className="h-6 w-6 text-primary" />
+                    {isLoadingCompanies
+                      ? Array.from({ length: 6 }).map((_, i) => (
+                          <Skeleton key={i} className="h-32" />
+                        ))
+                      : filteredCompanies.map((company) => (
+                          <Card
+                            key={company.id}
+                            className="cursor-pointer p-6 transition-colors hover:bg-accent"
+                            onClick={() =>
+                              navigate(`/innovative-action-detect/${company.id}`)
+                            }
+                          >
+                            <div className="flex items-center gap-4">
+                              <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
+                                <FolderOpen className="h-6 w-6 text-primary" />
+                              </div>
+                              <div className="flex-1">
+                                <h3 className="font-semibold text-foreground">
+                                  {company.name}
+                                </h3>
+                                {company.industry && (
+                                  <p className="text-sm text-muted-foreground">
+                                    {company.industry}
+                                  </p>
+                                )}
+                              </div>
                             </div>
-                          <div className="flex-1">
-                            <h3 className="font-semibold text-foreground">{company.name}</h3>
-                            {company.industry && (
-                              <p className="text-sm text-muted-foreground">{company.industry}</p>
-                            )}
-                          </div>
-                          </div>
-                        </Card>
-                      ))
-                    )}
+                          </Card>
+                        ))}
                   </div>
                 </ScrollArea>
               </div>
             ) : (
-              // Report List View
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div>
@@ -376,7 +405,8 @@ const InnovativeActionDetect = () => {
                       {selectedCompany?.name || "Company"} Reports
                     </h1>
                   </div>
-                  <Button 
+
+                  <Button
                     className="flex items-center gap-2"
                     onClick={() => setAddReportOpen(true)}
                   >
@@ -384,6 +414,20 @@ const InnovativeActionDetect = () => {
                     Add Report
                   </Button>
                 </div>
+
+                {currentJobId && (
+                  <Card className="p-4">
+                    <div className="space-y-1 text-sm">
+                      <p>
+                        <span className="font-medium">Job ID:</span> {currentJobId}
+                      </p>
+                      <p>
+                        <span className="font-medium">Status:</span>{" "}
+                        {currentJobStatus || "processing"}
+                      </p>
+                    </div>
+                  </Card>
+                )}
 
                 <div className="flex gap-2">
                   <div className="relative flex-1">
@@ -395,12 +439,12 @@ const InnovativeActionDetect = () => {
                       className="pl-10"
                     />
                   </div>
+
                   <Button
                     variant="outline"
                     onClick={() => setSortAscending(!sortAscending)}
-                    className="flex items-center gap-2"
                   >
-                    <ArrowUpDown className="h-4 w-4" />
+                    <ArrowUpDown className="mr-2 h-4 w-4" />
                     Sort by Year ({sortAscending ? "Asc" : "Desc"})
                   </Button>
                 </div>
@@ -411,41 +455,50 @@ const InnovativeActionDetect = () => {
                       <TableRow>
                         <TableHead>Year</TableHead>
                         <TableHead>Report Name</TableHead>
+                        <TableHead>Status</TableHead>
                         <TableHead className="text-right">Action</TableHead>
                       </TableRow>
                     </TableHeader>
+
                     <TableBody>
-                      {isLoadingReports ? (
-                        Array.from({ length: 5 }).map((_, i) => (
-                          <TableRow key={i}>
-                            <TableCell><Skeleton className="h-4 w-16" /></TableCell>
-                            <TableCell><Skeleton className="h-4 w-48" /></TableCell>
-                            <TableCell><Skeleton className="h-8 w-24 ml-auto" /></TableCell>
-                          </TableRow>
-                        ))
-                      ) : filteredReports.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={3} className="text-center text-muted-foreground">
-                            No reports found
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        filteredReports.map((report) => (
-                          <TableRow key={report.id}>
-                            <TableCell className="font-medium">{report.report_year}</TableCell>
-                            <TableCell>{report.file_name || "Unnamed Report"}</TableCell>
-                            <TableCell className="text-right">
-                              <Button
-                                size="sm"
-                                onClick={() => handleAnalyze(report)}
-                                className="ml-auto"
-                              >
-                                Analyze
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      )}
+                      {isLoadingReports
+                        ? Array.from({ length: 5 }).map((_, i) => (
+                            <TableRow key={i}>
+                              <TableCell>
+                                <Skeleton className="h-4 w-16" />
+                              </TableCell>
+                              <TableCell>
+                                <Skeleton className="h-4 w-48" />
+                              </TableCell>
+                              <TableCell>
+                                <Skeleton className="h-4 w-24" />
+                              </TableCell>
+                              <TableCell>
+                                <Skeleton className="ml-auto h-8 w-24" />
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        : filteredReports.map((report) => (
+                            <TableRow key={report.id}>
+                              <TableCell className="font-medium">
+                                {report.report_year}
+                              </TableCell>
+                              <TableCell>
+                                {report.file_name || "Unnamed Report"}
+                              </TableCell>
+                              <TableCell>
+                                {report.extraction_status || "pending"}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleAnalyze(report)}
+                                >
+                                  Analyze
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
                     </TableBody>
                   </Table>
                 </Card>
@@ -453,56 +506,66 @@ const InnovativeActionDetect = () => {
             )}
           </div>
 
-          {/* Right side - AI Chat */}
           <div className="w-[400px]">
             <SectorRankingChat externalContext={externalContext} />
           </div>
         </div>
       </div>
 
-      {/* Add Report Dialog */}
-      <Dialog open={addReportOpen} onOpenChange={(open) => {
-        setAddReportOpen(open);
-        if (!open) {
-          setNewReportYear("");
-          setNewReportName("");
-          setSelectedFile(null);
-        }
-      }}>
+      <Dialog open={addReportOpen} onOpenChange={setAddReportOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
               Add New Report - {selectedCompany?.name}
             </DialogTitle>
           </DialogHeader>
+
           <div className="space-y-4 py-4">
-            <div>
-              <label className="text-sm font-medium text-foreground">Report Year *</label>
-              <Input
-                type="number"
-                value={newReportYear}
-                onChange={(e) => setNewReportYear(e.target.value)}
-                placeholder="2024"
-              />
-            </div>
-            <div>
-              <label className="text-sm font-medium text-foreground">Upload Report File</label>
-              <Input
-                type="file"
-                onChange={handleFileChange}
-                accept=".pdf,.doc,.docx,.xls,.xlsx"
-                className="mt-2"
-              />
-              {selectedFile && (
-                <p className="text-sm text-muted-foreground mt-2">
-                  Selected: {selectedFile.name}
-                </p>
-              )}
-            </div>
-            <Button onClick={handleAddReport} className="w-full">
-              Add Report
+            <Input
+              type="number"
+              value={newReportYear}
+              onChange={(e) => setNewReportYear(e.target.value)}
+              placeholder="2024"
+            />
+
+            <Input
+              type="file"
+              onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+              accept="application/pdf,.pdf"
+            />
+
+            {selectedFile && (
+              <p className="mt-2 text-sm text-muted-foreground">
+                Selected: {selectedFile.name}
+              </p>
+            )}
+
+            <Button
+              onClick={handleAddReport}
+              className="w-full"
+              disabled={isUploadingReport}
+            >
+              {isUploadingReport ? "Processing..." : "Add Report"}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={analysisOpen} onOpenChange={setAnalysisOpen}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>
+              Analysis Result - {selectedReport?.file_name || "Report"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <ScrollArea className="max-h-[70vh] rounded-md border p-4">
+            <pre className="whitespace-pre-wrap break-words text-sm">
+              {selectedReport?.report_data
+                ? JSON.stringify(selectedReport.report_data, null, 2)
+                : "No extracted result available."}
+            </pre>
+          </ScrollArea>
         </DialogContent>
       </Dialog>
     </div>
