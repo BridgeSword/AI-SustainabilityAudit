@@ -1,344 +1,401 @@
-# SMARAG (Self-decisive Multi-Agentic Retrieval Augmented Generation) — Frontend and Backend Setup Guide
+# AI_SustainabilityAudit
 
-This repository contains the frontend and backend components for the **MARAG** project. The application includes a React-based frontend, a FastAPI-based backend, and supporting services managed via Docker.
+AI Sustainability Audit is a local demo stack that combines:
 
-## 🎯 Quick Start Guide
-
-Choose your setup mode:
-
-- **[🆕 First Time Setup](#-first-time-setup)** - For new users setting up the project for the first time
-- **[🔄 Returning User Setup](#-returning-user-setup)** - For users who have already set up the project and need to restart it
+- a **React + Vite frontend** (`client/`)
+- a **FastAPI backend** (`server/`)
+- a **PDF extraction service** (run separately, typically from `D:\Work\PDF_Extraction_SA_AIM_T2`)
+- a **PostgreSQL database** (using Docker + pgvector)
 
 ---
 
-## 🆕 First Time Setup
+## Current Architecture
 
-### Prerequisites
+The current local demo flow is:
 
-Before starting, ensure you have the following installed:
-- **Docker & Docker Compose** - For database and vector services
-- **Node.js (v16+)** - For the frontend
-- **Python 3.12** - For the backend
-- **Poetry** - For Python dependency management
-- **Ollama** - For local LLM inference (optional but recommended)
+```text
+Frontend (5173)
+→ Backend API (9092)
+→ PDF Extraction Service (8000)
+→ PostgreSQL (55432)
+```
 
-### Step 1: Clone and Setup Environment
+### Notes
 
-1. **Clone the repository** (if not already done):
-   ```bash
-   git clone <repository-url>
-   cd MARAG
-   ```
-
-2. **Create Python virtual environment**:
-   ```bash
-   conda create -n smarag python=3.12
-   conda activate smarag
-   ```
-
-3. **Install Python dependencies**:
-   ```bash
-   poetry install
-   ```
-
-### Step 2: Start Docker Services
-
-1. **Start all required services**:
-   ```bash
-   docker-compose -f docker-compose-sdmarag.yaml up -d
-   ```
-
-   This will start:
-   - MongoDB (port 27017)
-   - Milvus Vector Database (port 19530)
-   - Milvus Attu UI (port 8000)
-   - Redis (port 6379)
-   - MinIO (port 9000-9001)
-   - etcd (port 2379)
-
-### Step 3: Setup Ollama (Recommended)
-
-1. **Install Ollama**:
-   ```bash
-   # macOS
-   brew install Ollama/tap/ollama
-   
-   # Linux
-   curl -fsSL https://ollama.com/install.sh | sh
-   ```
-
-2. **Download and start the model**:
-   ```bash
-   ollama pull llama3:latest
-   ollama serve --host 0.0.0.0 --port 11434
-   ```
-
-### Step 4: Start Backend Services
-
-1. **Start the FastAPI backend**:
-   ```bash
-   export APP_ENV=local
-   export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
-   poetry run uvicorn server.src.main:app --host 0.0.0.0 --port 9092 --workers 1 --timeout-keep-alive 1000000
-   ```
-
-2. **In a new terminal, start Celery workers**:
-   ```bash
-   export APP_ENV=local
-   export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
-   poetry run celery -A server.src.main.celery_app worker -l info --pool=threads
-   ```
-
-### Step 5: Start Frontend
-
-1. **Install frontend dependencies**:
-   ```bash
-   cd client
-   npm install
-   ```
-
-2. **Start the development server**:
-   ```bash
-   npm run dev
-   ```
-
-### Step 6: Access the Application
-
-- **Frontend**: http://localhost:5173/
-- **Backend API**: http://localhost:9092/
-- **Milvus UI**: http://localhost:8000/
-- **Celery Flower**: http://localhost:5555/
+- The frontend does **not** talk directly to PostgreSQL.
+- The frontend talks to the backend.
+- The backend forwards PDF extraction requests to the PDF extraction service.
+- PostgreSQL is the main data store in the current setup.
+- Milvus is optional in the current demo. If it fails locally, the backend can still start.
 
 ---
 
-## 🔄 Returning User Setup
+## Repository Structure
 
-If you've already set up the project and just need to restart it:
+```text
+AI_SustainabilityAudit/
+├── client/                     # React + Vite frontend
+├── server/                     # FastAPI backend
+├── docker-compose-sdmarag.yaml # Optional supporting services
+├── README.md
+└── ...
+```
 
-### Quick Restart (All Services)
+If you keep the PDF extraction service as a separate local project, it typically lives outside this repo, for example:
 
-1. **Start Docker services**:
-   ```bash
-   docker-compose -f docker-compose-sdmarag.yaml up -d
-   ```
-
-2. **Start Ollama** (if using local LLM):
-   ```bash
-   ollama serve --host 0.0.0.0 --port 11434
-   ```
-
-3. **Start backend** (Terminal 1):
-   ```bash
-   conda activate smarag
-   export APP_ENV=local
-   export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
-   poetry run uvicorn server.src.main:app --host 0.0.0.0 --port 9092 --workers 1 --timeout-keep-alive 1000000
-   ```
-
-4. **Start Celery workers** (Terminal 2):
-   ```bash
-   conda activate smarag
-   export APP_ENV=local
-   export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
-   poetry run celery -A server.src.main.celery_app worker -l info --pool=threads
-   ```
-
-5. **Start frontend** (Terminal 3):
-   ```bash
-   cd client
-   npm run dev
-   ```
-
-### Using the Start Script (Alternative)
-
-You can also use the provided start script:
-```bash
-conda activate smarag
-sh start.sh
+```text
+D:\Work\PDF_Extraction_SA_AIM_T2
 ```
 
 ---
 
-## 🚀 How to Use the Application
+## Service Ports
 
-### Carbon Report Generation Workflow
-
-1. **Register/Login**: Create an account or login to the system
-2. **Fill Form**: Enter your carbon report details:
-   - Report Name
-   - Carbon Standard (e.g., GHG)
-   - Carbon Goal
-   - Carbon Plan
-   - Carbon Action
-3. **Generate Plan**: Click Submit to generate an AI-powered plan
-4. **Review & Approve**: Review the generated plan and approve it
-5. **Generate Report**: The system will generate the full carbon report
-6. **Edit & Download**: Edit sections as needed and download the final report
-
-### Key Features
-
-- **AI-Powered Planning**: Uses Ollama with LLaMA3 for intelligent plan generation
-- **Multi-Agent System**: Different AI agents handle different aspects of report generation
-- **Real-time Updates**: WebSocket-based real-time communication
-- **Interactive Editing**: Edit generated content with AI assistance
-- **PDF Export**: Download reports in PDF format
+- **Frontend**: `http://localhost:5173`
+- **Backend API**: `http://localhost:9092`
+- **PDF Extraction Service**: `http://127.0.0.1:8000`
+- **PostgreSQL**: `127.0.0.1:55432`
 
 ---
 
-## 🛠️ Detailed Setup Instructions
+## Prerequisites
 
-### Prerequisites Installation
+Install the following first:
 
-#### Docker & Docker Compose
-- **macOS**: Install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- **Linux**: 
-  ```bash
-  sudo apt-get update
-  sudo apt-get install docker.io docker-compose
-  sudo usermod -aG docker $USER
-  ```
+- **Python 3.12**
+- **Node.js + npm**
+- **Docker Desktop**
+- **Git**
 
-#### Node.js
-- **macOS**: `brew install node`
-- **Linux**: 
-  ```bash
-  curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-  sudo apt-get install -y nodejs
-  ```
-
-#### Python & Poetry
-- **Install Poetry**:
-  ```bash
-  curl -sSL https://install.python-poetry.org | python3 -
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-  source ~/.bashrc
-  ```
-
-- **Install Anaconda**:
-  ```bash
-  # macOS
-  brew install --cask anaconda
-  
-  # Linux
-  mkdir -p ~/miniconda3
-  wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh
-  bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
-  rm ~/miniconda3/miniconda.sh
-  source ~/miniconda3/bin/activate
-  conda init --all
-  ```
-
-#### Ollama Setup
-
-**macOS Installation**:
-```bash
-brew install Ollama/tap/ollama
-ollama pull llama3:latest
-ollama serve --host 0.0.0.0 --port 11434
-```
-
-**Linux Installation**:
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-ollama pull llama3:latest
-ollama serve --host 0.0.0.0 --port 11434
-```
-
-**Optional: Auto-start Ollama Service (Linux)**:
-```bash
-sudo useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
-sudo usermod -a -G ollama $(whoami)
-
-sudo nano /etc/systemd/system/ollama.service
-```
-
-Add this content:
-```ini
-[Unit]
-Description=Ollama Service
-After=network-online.target
-
-[Service]
-ExecStart=/usr/bin/ollama serve
-User=ollama
-Group=ollama
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=default.target
-```
-
-Then:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable ollama
-sudo systemctl start ollama
-```
+Recommended:
+- a Python virtual environment for the backend
+- a separate Python virtual environment for the PDF extraction service
 
 ---
 
-## 🌐 Service URLs
+## Quick Start (Windows / PowerShell)
 
-| Service | URL | Description |
-|---------|-----|-------------|
-| **Frontend** | http://localhost:5173/ | React application UI |
-| **Backend API** | http://localhost:9092/ | FastAPI backend with Swagger docs |
-| **Milvus UI** | http://localhost:8000/ | Vector database management |
-| **Celery Flower** | http://localhost:5555/ | Task queue monitoring |
-| **MongoDB** | mongodb://localhost:27017 | Database connection |
+### 1. Start PostgreSQL
 
----
+The project uses PostgreSQL with pgvector.
 
-## 📊 Monitoring & Debugging
+Create the container:
 
-### MongoDB Monitoring
-1. Install [MongoDB Compass](https://www.mongodb.com/products/tools/compass)
-2. Connect using: `mongodb://localhost:27017`
-3. No authentication required (development setup)
+```powershell
+docker run --name sustain-postgres `
+  -e POSTGRES_DB=sustainability_ai `
+  -e POSTGRES_USER=postgres `
+  -e POSTGRES_PASSWORD=postgres `
+  -p 55432:5432 `
+  -d pgvector/pgvector:pg16
+```
 
-### Service Status Check
-```bash
-# Check Docker services
+If the container already exists:
+
+```powershell
+docker start sustain-postgres
+```
+
+Check it:
+
+```powershell
 docker ps
-
-# Check if ports are in use
-lsof -i :5173  # Frontend
-lsof -i :9092  # Backend
-lsof -i :11434 # Ollama
-lsof -i :27017 # MongoDB
-lsof -i :19530 # Milvus
 ```
 
-### Common Issues & Solutions
-
-1. **Port already in use**: Kill processes using the ports
-2. **Docker services not starting**: Check Docker daemon is running
-3. **Ollama model not found**: Run `ollama pull llama3:latest`
-4. **Backend connection issues**: Ensure all environment variables are set
+You should see `sustain-postgres` running.
 
 ---
 
-## 🔧 Development
+### 2. Backend environment variables
 
-### Project Structure
-```
-MARAG/
-├── client/                 # React frontend
-├── server/                 # FastAPI backend
-│   ├── src/
-│   │   ├── api/           # API endpoints
-│   │   ├── core/          # Core configuration
-│   │   ├── services/      # Business logic
-│   │   └── db/            # Database models
-├── docker-compose-sdmarag.yaml  # Docker services
-└── start.sh               # Startup script
+Create or update your backend environment variables to:
+
+```env
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=55432
+POSTGRES_DB=sustainability_ai
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+APP_ENV=local
 ```
 
-### Environment Variables
-The application uses these key environment variables:
-- `APP_ENV=local`
-- `MILVUS_URI=http://localhost:19530`
-- `MONGO_HOST=localhost`
-- `MONGO_PORT=27017`
-- `CELERY_BROKER=redis://localhost:6379/0`
+You can place these in your environment or in your local backend setup.
+
+---
+
+### 3. Start the backend
+
+From the repository root:
+
+```powershell
+cd D:\Work\AI_SustainabilityAudit
+.\.venv\Scripts\python.exe -m uvicorn server.src.main:app --host 0.0.0.0 --port 9092
+```
+
+Health check:
+
+```text
+http://localhost:9092/health
+```
+
+Expected behavior:
+- backend starts successfully
+- PostgreSQL tables are initialized
+- `/health` returns success
+
+#### Important
+Milvus may fail to initialize locally. In the current local demo this is **not fatal** if the app continues starting.
+
+---
+
+### 4. Start the frontend
+
+From the frontend directory:
+
+```powershell
+cd D:\Work\AI_SustainabilityAudit\client
+npm install
+npm run dev
+```
+
+Frontend URL:
+
+```text
+http://localhost:5173
+```
+
+Create or update `client/.env`:
+
+```env
+VITE_API_BASE_URL=http://localhost:9092
+```
+
+---
+
+### 5. Start the PDF extraction service
+
+If you keep the PDF extraction service as a separate local project:
+
+```powershell
+cd D:\Work\PDF_Extraction_SA_AIM_T2
+D:\Work\PDF_Extraction_SA_AIM_T2\.venv\Scripts\python.exe -m uvicorn web_api.main:app --app-dir . --host 127.0.0.1 --port 8000
+```
+
+PDF extraction docs:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+---
+
+## Recommended Local Startup Order
+
+### Terminal 1 — PostgreSQL
+
+```powershell
+docker start sustain-postgres
+```
+
+### Terminal 2 — Backend
+
+```powershell
+cd D:\Work\AI_SustainabilityAudit
+.\.venv\Scripts\python.exe -m uvicorn server.src.main:app --host 0.0.0.0 --port 9092
+```
+
+### Terminal 3 — PDF Extraction
+
+```powershell
+cd D:\Work\PDF_Extraction_SA_AIM_T2
+D:\Work\PDF_Extraction_SA_AIM_T2\.venv\Scripts\python.exe -m uvicorn web_api.main:app --app-dir . --host 127.0.0.1 --port 8000
+```
+
+### Terminal 4 — Frontend
+
+```powershell
+cd D:\Work\AI_SustainabilityAudit\client
+npm run dev
+```
+
+---
+
+## Current Demo Flow
+
+### Add Report
+
+The current upload flow is:
+
+1. Frontend creates a report row through the backend
+2. Frontend uploads the PDF through:
+   - `POST /pdf/v1/upload`
+3. Backend forwards the file to the PDF extraction service
+4. Frontend polls job status
+5. When extraction completes, the report row is updated
+
+### Analyze
+
+The `Analyze` action should only be used **after extraction has completed**.
+
+If a report has not finished extraction yet, the UI should show that the report is not ready.
+
+---
+
+## PDF Extraction Service Notes
+
+The PDF extraction service is job-based:
+
+- `POST /api/extract`
+- `GET /api/extract/{job_id}/status`
+- `GET /api/extract/{job_id}/result`
+
+### Important behaviors
+
+- `POST /api/extract` does **not** return final extracted data immediately
+- it returns a `job_id`
+- status must be polled
+- result must be fetched after the job completes
+
+---
+
+## Common PDF Extraction Problems
+
+### 1. Missing `docling`
+
+Install it in the PDF extraction service environment:
+
+```powershell
+python -m pip install docling
+```
+
+---
+
+### 2. Missing `spacy`
+
+Install it in the PDF extraction service environment:
+
+```powershell
+python -m pip install spacy
+```
+
+---
+
+### 3. Large PDFs fail with OCR memory errors
+
+Typical symptoms:
+
+- `std::bad_alloc`
+- `MemoryError`
+- `RapidOCR returned empty result`
+
+This usually means the PDF is too large or too memory-heavy for the current local machine.
+
+Recommended workaround for demos:
+
+- use a **smaller PDF**
+- use a **shorter page range**
+- use a PDF that actually contains extractable ESG metric tables
+
+---
+
+### 4. Result comes back but all normalized ESG values are `null`
+
+This usually means one or more of the following happened:
+
+- text extraction was skipped
+- OCR failed on the important pages
+- the extracted table was not actually an ESG metric table
+- the PDF mostly produced headings / table-of-contents data instead of metric values
+
+---
+
+## Backend Health and Validation
+
+### Health endpoint
+
+```text
+http://localhost:9092/health
+```
+
+### Optional database validation
+
+If you want to validate PostgreSQL manually from Docker:
+
+```powershell
+docker exec -it sustain-postgres psql -U postgres -l
+```
+
+You should see:
+
+```text
+sustainability_ai
+```
+
+---
+
+## Frontend Notes
+
+The frontend currently depends on:
+
+```env
+VITE_API_BASE_URL=http://localhost:9092
+```
+
+If the frontend is running but API calls fail, check:
+
+- backend is running on `9092`
+- PDF extraction is running on `8000`
+- frontend `.env` points to the correct backend URL
+- the dev server was restarted after editing `.env`
+
+---
+
+## Useful URLs
+
+- **Frontend**: `http://localhost:5173`
+- **Backend health**: `http://localhost:9092/health`
+- **Backend docs**: `http://localhost:9092/docs`
+- **PDF extraction docs**: `http://127.0.0.1:8000/docs`
+
+---
+
+## Git Workflow (Cornell GitHub Enterprise)
+
+If you want to push your current local work to the Cornell repository branch:
+
+```powershell
+git remote add cornell https://github.coecis.cornell.edu/CATChain/AI_SustainabilityAudit.git
+git push cornell HEAD:feature/postgres-migration --force
+```
+
+If `cornell` already exists, use:
+
+```powershell
+git remote set-url cornell https://github.coecis.cornell.edu/CATChain/AI_SustainabilityAudit.git
+git push cornell HEAD:feature/postgres-migration --force
+```
+
+---
+
+## Current Status Summary
+
+At the current stage, the repo is intended to support:
+
+- local frontend development
+- local FastAPI backend
+- PostgreSQL-based data storage
+- PDF extraction integration
+- local demo of report upload and extraction flow
+
+Not all advanced features are fully production-ready yet, but the local demo stack is structured around:
+
+- frontend on `5173`
+- backend on `9092`
+- PDF extraction on `8000`
+- PostgreSQL on `55432`
+
+---
+
+## License / Internal Usage
+
+This repository is currently used for internal project development and demo workflow preparation.
