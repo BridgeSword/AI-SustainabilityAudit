@@ -113,7 +113,7 @@ const Companies = () => {
               </CardHeader>
               <CardContent className="flex gap-2">
                 <Button variant="outline" className="flex-1" asChild><a href={`/dashboard/${company.id}`}>Dashboard</a></Button>
-                <Button variant="outline" className="flex-1" asChild><a href={`/reports?company=${company.id}`}>Reports</a></Button>
+                <Button variant="outline" className="flex-1" asChild><a href={`/report-analysis/${company.id}`}>Reports</a></Button>
               </CardContent>
             </Card>
           ))}

@@ -1,11 +1,12 @@
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { BarChart3, Building2, FileText, Home, TrendingUp, Lightbulb } from "lucide-react";
+import { BarChart3, Building2, FileText, Home, TrendingUp } from "lucide-react";
 
 const Navigation = () => {
   const location = useLocation();
   
-  const isActive = (path: string) => location.pathname === path;
+  const isActive = (path: string) =>
+    path === "/" ? location.pathname === path : location.pathname.startsWith(path);
   
   return (
     <nav className="border-b border-border bg-card">
@@ -29,15 +30,6 @@ const Navigation = () => {
               </Link>
             </Button>
             <Button
-              variant={isActive("/dashboard") ? "default" : "ghost"}
-              asChild
-            >
-              <Link to="/dashboard" className="flex items-center gap-2">
-                <BarChart3 className="h-4 w-4" />
-                Dashboard
-              </Link>
-            </Button>
-            <Button
               variant={isActive("/companies") ? "default" : "ghost"}
               asChild
             >
@@ -47,12 +39,12 @@ const Navigation = () => {
               </Link>
             </Button>
             <Button
-              variant={isActive("/reports") ? "default" : "ghost"}
+              variant={isActive("/dashboard") ? "default" : "ghost"}
               asChild
             >
-              <Link to="/reports" className="flex items-center gap-2">
-                <FileText className="h-4 w-4" />
-                Reports
+              <Link to="/dashboard" className="flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                Dashboard
               </Link>
             </Button>
             <Button
@@ -61,16 +53,16 @@ const Navigation = () => {
             >
               <Link to="/sector-ranking" className="flex items-center gap-2">
                 <TrendingUp className="h-4 w-4" />
-                Sector Ranking
+                Sector analysis
               </Link>
             </Button>
             <Button
-              variant={isActive("/innovative-action-detect") ? "default" : "ghost"}
+              variant={isActive("/report-analysis") ? "default" : "ghost"}
               asChild
             >
-              <Link to="/innovative-action-detect" className="flex items-center gap-2">
-                <Lightbulb className="h-4 w-4" />
-                Innovative Action
+              <Link to="/report-analysis" className="flex items-center gap-2">
+                <FileText className="h-4 w-4" />
+                Report analysis
               </Link>
             </Button>
           </div>

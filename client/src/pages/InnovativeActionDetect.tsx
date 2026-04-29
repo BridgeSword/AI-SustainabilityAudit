@@ -26,7 +26,9 @@ import {
   Search,
   ArrowUpDown,
   FileDown,
+  Pencil,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import Navigation from "@/components/layout/Navigation";
@@ -39,6 +41,9 @@ import {
   uploadReportPdf,
   getPdfDownloadUrl,
   fixStuckReport,
+  updateReport,
+  replacePdf,
+  deleteReport,
 } from "@/lib/api";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:9092").replace(/\/$/, "");
@@ -84,6 +89,15 @@ const InnovativeActionDetect = () => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editReport, setEditReport] = useState<Report | null>(null);
+  const [editYear, setEditYear] = useState("");
+  const [editFileName, setEditFileName] = useState("");
+  const [editFile, setEditFile] = useState<File | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Report | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const [isUploadingReport, setIsUploadingReport] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
@@ -303,6 +317,88 @@ const InnovativeActionDetect = () => {
     setAnalysisOpen(true);
   };
 
+  const openEdit = (report: Report) => {
+    setEditReport(report);
+    setEditYear(String(report.report_year));
+    setEditFileName(report.file_name || "");
+    setEditFile(null);
+    setEditOpen(true);
+  };
+
+  const handleEdit = async () => {
+    if (!editReport || !numericCompanyId) return;
+
+    setIsEditing(true);
+    try {
+      const year = parseInt(editYear, 10);
+      const nextData = {
+        ...(editReport.report_data || {}),
+        file_name: editFile?.name || editFileName || editReport.file_name || `Report ${year}`,
+      };
+
+      await updateReport(editReport.id, {
+        year,
+        extracted_json: nextData,
+      });
+
+      if (editFile) {
+        const response = await replacePdf(editReport.id, editFile);
+        if (response.job_id) {
+          setCurrentJobId(response.job_id);
+          setCurrentJobStatus("processing");
+          await pollUploadJob(response.job_id, editReport.id);
+        }
+      }
+
+      toast({
+        title: "Success",
+        description: "Report updated successfully",
+      });
+
+      setEditOpen(false);
+      await fetchReports(numericCompanyId);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to update report",
+        variant: "destructive",
+      });
+    } finally {
+      setIsEditing(false);
+      setCurrentJobId(null);
+      setCurrentJobStatus(null);
+    }
+  };
+
+  const openDelete = (report: Report) => {
+    setDeleteTarget(report);
+    setDeleteOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget || !numericCompanyId) return;
+
+    setIsDeleting(true);
+    try {
+      await deleteReport(deleteTarget.id);
+      toast({
+        title: "Deleted",
+        description: "Report has been removed",
+      });
+      setDeleteOpen(false);
+      setDeleteTarget(null);
+      await fetchReports(numericCompanyId);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to delete report",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const handleFixStuck = async (report: Report) => {
     if (!numericCompanyId) return;
     setFixingReportId(report.id);
@@ -343,7 +439,7 @@ const InnovativeActionDetect = () => {
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h1 className="text-3xl font-bold text-foreground">
-                    Innovative Action Detect
+                    Report analysis
                   </h1>
 
                   <Dialog open={addCompanyOpen} onOpenChange={setAddCompanyOpen}>
@@ -399,7 +495,7 @@ const InnovativeActionDetect = () => {
                             key={company.id}
                             className="cursor-pointer p-6 transition-colors hover:bg-accent"
                             onClick={() =>
-                              navigate(`/innovative-action-detect/${company.id}`)
+                              navigate(`/report-analysis/${company.id}`)
                             }
                           >
                             <div className="flex items-center gap-4">
@@ -428,7 +524,7 @@ const InnovativeActionDetect = () => {
                   <div>
                     <Button
                       variant="ghost"
-                      onClick={() => navigate("/innovative-action-detect")}
+                      onClick={() => navigate("/report-analysis")}
                       className="mb-2"
                     >
                       ← Back to Companies
@@ -488,7 +584,7 @@ const InnovativeActionDetect = () => {
                         <TableHead>Year</TableHead>
                         <TableHead>Report Name</TableHead>
                         <TableHead>Status</TableHead>
-                        <TableHead className="text-right">Action</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
 
@@ -566,15 +662,35 @@ const InnovativeActionDetect = () => {
                                 )}
                               </TableCell>
                               <TableCell className="text-right">
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleAnalyze(report)}
-                                  disabled={
-                                    report.extraction_status !== "completed"
-                                  }
-                                >
-                                  Analyze
-                                </Button>
+                                <div className="inline-flex items-center gap-1">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleAnalyze(report)}
+                                    disabled={
+                                      report.extraction_status !== "completed"
+                                    }
+                                  >
+                                    Analyze
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-8 w-8 p-0"
+                                    title="Edit report"
+                                    onClick={() => openEdit(report)}
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                                    title="Delete report"
+                                    onClick={() => openDelete(report)}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
                               </TableCell>
                             </TableRow>
                           ))}
@@ -625,6 +741,76 @@ const InnovativeActionDetect = () => {
               disabled={isUploadingReport}
             >
               {isUploadingReport ? "Processing..." : "Add Report"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Edit Report - {editReport?.file_name || "Report"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <Input
+              type="number"
+              value={editYear}
+              onChange={(e) => setEditYear(e.target.value)}
+              placeholder="Report year"
+            />
+
+            <Input
+              value={editFileName}
+              onChange={(e) => setEditFileName(e.target.value)}
+              placeholder="Report name"
+            />
+
+            <Input
+              type="file"
+              onChange={(e) => setEditFile(e.target.files?.[0] || null)}
+              accept="application/pdf,.pdf"
+            />
+
+            {editFile && (
+              <p className="mt-2 text-sm text-muted-foreground">
+                New PDF: {editFile.name}
+              </p>
+            )}
+
+            <Button
+              onClick={handleEdit}
+              className="w-full"
+              disabled={isEditing}
+            >
+              {isEditing ? "Saving..." : "Save Changes"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Report</DialogTitle>
+          </DialogHeader>
+
+          <p className="py-4 text-sm text-muted-foreground">
+            Delete {deleteTarget?.file_name || "this report"}? This will also remove the stored PDF and extracted text.
+          </p>
+
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={isDeleting}
+            >
+              {isDeleting ? "Deleting..." : "Delete"}
             </Button>
           </div>
         </DialogContent>
