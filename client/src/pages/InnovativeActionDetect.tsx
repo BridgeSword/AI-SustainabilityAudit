@@ -20,7 +20,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, FolderOpen, Search, ArrowUpDown } from "lucide-react";
+import {
+  Plus,
+  FolderOpen,
+  Search,
+  ArrowUpDown,
+  FileDown,
+  RefreshCw,
+} from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import Navigation from "@/components/layout/Navigation";
 import SectorRankingChat from "@/components/sector-ranking/SectorRankingChat";
@@ -30,6 +37,8 @@ import {
   listCompanies,
   listReports,
   uploadReportPdf,
+  getPdfDownloadUrl,
+  fixStuckReport,
 } from "@/lib/api";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:9092").replace(/\/$/, "");
@@ -79,6 +88,8 @@ const InnovativeActionDetect = () => {
   const [isUploadingReport, setIsUploadingReport] = useState(false);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [currentJobStatus, setCurrentJobStatus] = useState<string | null>(null);
+
+  const [fixingReportId, setFixingReportId] = useState<number | null>(null);
 
   const [externalContext, setExternalContext] = useState<any>({});
 
@@ -292,6 +303,27 @@ const InnovativeActionDetect = () => {
     setAnalysisOpen(true);
   };
 
+  const handleFixStuck = async (report: Report) => {
+    if (!numericCompanyId) return;
+    setFixingReportId(report.id);
+    try {
+      await fixStuckReport(report.id);
+      toast({
+        title: "Success",
+        description: "Report extraction completed",
+      });
+      await fetchReports(numericCompanyId);
+    } catch {
+      toast({
+        title: "Error",
+        description: "Failed to fix stuck report",
+        variant: "destructive",
+      });
+    } finally {
+      setFixingReportId(null);
+    }
+  };
+
   const filteredCompanies = companies.filter((company) =>
     company.name.toLowerCase().includes(companySearch.toLowerCase())
   );
@@ -484,15 +516,62 @@ const InnovativeActionDetect = () => {
                                 {report.report_year}
                               </TableCell>
                               <TableCell>
-                                {report.file_name || "Unnamed Report"}
+                                <a
+                                  href={getPdfDownloadUrl(report.id)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
+                                >
+                                  <FileDown className="h-4 w-4" />
+                                  {report.file_name || "Unnamed Report"}
+                                </a>
                               </TableCell>
                               <TableCell>
-                                {report.extraction_status || "pending"}
+                                {report.extraction_status === "processing" ? (
+                                  <span className="inline-flex items-center gap-2">
+                                    <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-800">
+                                      processing
+                                    </span>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 px-2 text-xs"
+                                      disabled={fixingReportId === report.id}
+                                      onClick={() => handleFixStuck(report)}
+                                    >
+                                      <RefreshCw
+                                        className={`mr-1 h-3 w-3 ${
+                                          fixingReportId === report.id
+                                            ? "animate-spin"
+                                            : ""
+                                        }`}
+                                      />
+                                      {fixingReportId === report.id
+                                        ? "Fixing..."
+                                        : "Fix"}
+                                    </Button>
+                                  </span>
+                                ) : report.extraction_status === "completed" ? (
+                                  <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">
+                                    completed
+                                  </span>
+                                ) : report.extraction_status === "failed" ? (
+                                  <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">
+                                    failed
+                                  </span>
+                                ) : (
+                                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                                    {report.extraction_status || "pending"}
+                                  </span>
+                                )}
                               </TableCell>
                               <TableCell className="text-right">
                                 <Button
                                   size="sm"
                                   onClick={() => handleAnalyze(report)}
+                                  disabled={
+                                    report.extraction_status !== "completed"
+                                  }
                                 >
                                   Analyze
                                 </Button>
@@ -559,12 +638,149 @@ const InnovativeActionDetect = () => {
             </DialogTitle>
           </DialogHeader>
 
-          <ScrollArea className="max-h-[70vh] rounded-md border p-4">
-            <pre className="whitespace-pre-wrap break-words text-sm">
-              {selectedReport?.report_data
-                ? JSON.stringify(selectedReport.report_data, null, 2)
-                : "No extracted result available."}
-            </pre>
+          <ScrollArea className="max-h-[70vh]">
+            {selectedReport?.report_data ? (
+              <div className="space-y-6 p-4">
+                {/* ESG Metrics */}
+                <div>
+                  <h3 className="mb-3 text-lg font-semibold">
+                    ESG Metrics
+                  </h3>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {[
+                      {
+                        label: "GHG Emissions",
+                        key: "ghg_emissions",
+                        unit: "tCO2e",
+                      },
+                      {
+                        label: "Energy Consumption",
+                        key: "energy_consumption_mwh",
+                        unit: "MWh",
+                      },
+                      {
+                        label: "Water Withdrawal",
+                        key: "water_withdrawal_m3",
+                        unit: "m\u00B3",
+                      },
+                      {
+                        label: "Waste Generated",
+                        key: "waste_generated_tonnes",
+                        unit: "tonnes",
+                      },
+                    ].map(({ label, key, unit }) => {
+                      const val =
+                        selectedReport.report_data?.[key];
+                      return (
+                        <Card key={key} className="p-4">
+                          <p className="text-sm text-muted-foreground">
+                            {label}
+                          </p>
+                          <p className="mt-1 text-2xl font-bold">
+                            {val != null
+                              ? Number(val).toLocaleString()
+                              : "—"}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {unit}
+                          </p>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Scope Breakdown */}
+                <div>
+                  <h3 className="mb-3 text-lg font-semibold">
+                    Scope Breakdown
+                  </h3>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    {[
+                      { label: "Scope 1", key: "scope_1_emissions" },
+                      { label: "Scope 2", key: "scope_2_emissions" },
+                      { label: "Scope 3", key: "scope_3_emissions" },
+                    ].map(({ label, key }) => {
+                      const val =
+                        selectedReport.report_data?.[key];
+                      return (
+                        <Card key={key} className="p-4">
+                          <p className="text-sm text-muted-foreground">
+                            {label}
+                          </p>
+                          <p className="mt-1 text-xl font-bold">
+                            {val != null
+                              ? Number(val).toLocaleString()
+                              : "—"}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            tCO2e
+                          </p>
+                        </Card>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Extracted Text */}
+                {selectedReport.report_data?.full_text && (
+                  <div>
+                    <h3 className="mb-3 text-lg font-semibold">
+                      Extracted Text
+                    </h3>
+                    <Card className="p-4">
+                      <p className="whitespace-pre-wrap text-sm">
+                        {String(
+                          selectedReport.report_data.full_text
+                        )}
+                      </p>
+                    </Card>
+                  </div>
+                )}
+
+                {/* Metadata */}
+                <div>
+                  <h3 className="mb-3 text-lg font-semibold">
+                    Metadata
+                  </h3>
+                  <Card className="p-4">
+                    <div className="grid gap-2 text-sm sm:grid-cols-2">
+                      <div>
+                        <span className="text-muted-foreground">
+                          File:{" "}
+                        </span>
+                        {selectedReport.report_data?.file_name ||
+                          "—"}
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">
+                          Method:{" "}
+                        </span>
+                        {selectedReport.report_data
+                          ?.extraction_method || "—"}
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground">
+                          Extracted at:{" "}
+                        </span>
+                        {selectedReport.report_data?.extracted_at
+                          ? new Date(
+                              String(
+                                selectedReport.report_data
+                                  .extracted_at
+                              )
+                            ).toLocaleString()
+                          : "—"}
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+              </div>
+            ) : (
+              <p className="p-4 text-muted-foreground">
+                No extracted result available.
+              </p>
+            )}
           </ScrollArea>
         </DialogContent>
       </Dialog>

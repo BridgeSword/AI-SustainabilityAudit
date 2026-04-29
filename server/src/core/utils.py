@@ -4,13 +4,10 @@ import logging
 import hashlib
 from pathlib import Path
 
-import torch
-
-from markdown_pdf import MarkdownPdf, Section
-
-from fpdf import Align
-from pdfnumbering import PdfNumberer
-from pypdf import PdfWriter
+# Heavy deps (torch / PDF tooling) are imported lazily inside the functions that
+# actually use them, so that simply importing this module does NOT require the
+# full ML / PDF stack to be installed. This lets the backend boot in a minimal
+# environment (DB + API only).
 
 from ..core.config import settings
 
@@ -18,7 +15,10 @@ from ..core.config import settings
 def get_logger(scope):
     logger = logging.getLogger(scope)
 
-    if os.environ["APP_ENV"] in ["local", "dev", "stage"]:
+    # Fall back to "local" if APP_ENV hasn't been set yet — this module can be
+    # imported before load_dotenv() runs, so a hard KeyError would break startup.
+    app_env = os.environ.get("APP_ENV", "local")
+    if app_env in ["local", "dev", "stage"]:
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
@@ -60,6 +60,7 @@ def get_hash(file_path):
 
 
 def get_device(req_device: str = None):
+    import torch  # lazy
     if req_device is not None and req_device.lower().strip() == "cuda" and torch.cuda.is_available():
         return "cuda"
     elif req_device is not None and req_device.lower().strip() == "mps" and torch.mps.is_available():
@@ -70,6 +71,7 @@ def get_device(req_device: str = None):
 
 
 def clear_torch_cache():
+    import torch  # lazy
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     if torch.mps.is_available():
@@ -100,6 +102,11 @@ def thresolder(curr_val, max_val):
 
 
 def add_pdf_numbering(file_path):
+    # lazy imports – only needed when actually generating PDFs
+    from fpdf import Align
+    from pdfnumbering import PdfNumberer
+    from pypdf import PdfWriter
+
     numberer = PdfNumberer(
         first_number=1,
         ignore_pages=(),
@@ -113,12 +120,15 @@ def add_pdf_numbering(file_path):
         # page_margin=(28, 28),
     )
 
-    document = PdfWriter(clone_from = file_path)
+    document = PdfWriter(clone_from=file_path)
     numberer.add_page_numbering(document.pages)
     document.write(file_path)
 
 
 def create_multipage_pdf(text, company_name, filename="output.pdf"):
+    # lazy imports – only needed when actually generating PDFs
+    from markdown_pdf import MarkdownPdf, Section
+
     pdf_title = f"<center><h1>{company_name} Carbon Report</h1></center>\n\n"
     file_path = os.path.join(settings.carbon_reports_path, filename)
 

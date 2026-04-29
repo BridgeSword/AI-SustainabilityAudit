@@ -28,6 +28,11 @@ class ReportCreate(BaseModel):
     anomaly_status: Optional[str] = "pending"
 
 
+class ReportUpdate(BaseModel):
+    year: Optional[int] = None
+    extracted_json: Optional[dict[str, Any]] = None
+
+
 class ReportRead(BaseModel):
     id: int
     user_id: Optional[int] = None
