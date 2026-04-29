@@ -5,8 +5,9 @@ import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -34,6 +35,74 @@ def _import_docling_converter():
         ) from e
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_docling_converter():
+    """
+    Build DocumentConverter with optional OCR disable switch.
+    Env:
+      - DOCLING_DISABLE_OCR=1 : try to disable OCR for digital PDFs (faster, lower memory).
+    """
+    DocumentConverter = _import_docling_converter()
+    disable_ocr = _env_flag("DOCLING_DISABLE_OCR", default=False)
+    if not disable_ocr:
+        return DocumentConverter()
+
+    # Best-effort config: API shape can vary by docling version.
+    try:
+        from docling.datamodel.pipeline_options import PdfPipelineOptions  # type: ignore
+        from docling.document_converter import PdfFormatOption  # type: ignore
+
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.do_ocr = False
+        return DocumentConverter(format_options={"pdf": PdfFormatOption(pipeline_options=pipeline_options)})
+    except Exception:
+        # Fallback silently to default converter if this version does not support these options.
+        return DocumentConverter()
+
+
+def _get_pdf_page_count(pdf_path: str | Path) -> int:
+    try:
+        import fitz  # type: ignore
+    except Exception as e:
+        raise ImportError(
+            "PyMuPDF is required for chunked PDF processing. "
+            "Install with: pip install pymupdf"
+        ) from e
+
+    doc = fitz.open(str(pdf_path))
+    try:
+        return int(doc.page_count)
+    finally:
+        doc.close()
+
+
+def _write_pdf_page_range(
+    pdf_path: str | Path,
+    start_page: int,
+    end_page: int,
+    out_path: str | Path,
+) -> None:
+    """
+    Writes page range [start_page, end_page) (0-indexed) into a new PDF file.
+    """
+    import fitz  # type: ignore
+
+    src = fitz.open(str(pdf_path))
+    out = fitz.open()
+    try:
+        out.insert_pdf(src, from_page=start_page, to_page=end_page - 1)
+        out.save(str(out_path), garbage=3, deflate=True)
+    finally:
+        out.close()
+        src.close()
+
+
 def _parse_number(x: Any) -> Optional[float]:
     if x is None:
         return None
@@ -56,13 +125,50 @@ def _parse_number(x: Any) -> Optional[float]:
     return -val if neg else val
 
 
+def _year_patterns(year: int) -> list[re.Pattern[str]]:
+    """
+    Match common table header year formats:
+    - 2023
+    - FY2023 / FY 2023
+    - FY23 / FY 23
+    """
+    yy = str(year % 100).zfill(2)
+    yyyy = str(year)
+    return [
+        re.compile(rf"\b{re.escape(yyyy)}\b", re.IGNORECASE),
+        re.compile(rf"\bfy\s*{re.escape(yyyy)}\b", re.IGNORECASE),
+        re.compile(rf"\bfy\s*{re.escape(yy)}\b", re.IGNORECASE),
+    ]
+
+
+def _row_has_year(cell_text: str, year: int) -> bool:
+    s = _normalize_text(cell_text)
+    if not s:
+        return False
+    return any(p.search(s) for p in _year_patterns(year))
+
+
+def _normalize_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value).replace("\n", " ")).strip().lower()
+
+
+def _table_has_year(table_2d: list[list[Any]], year: int, scan_rows: int = 4) -> bool:
+    if not table_2d:
+        return False
+    for r in table_2d[:scan_rows]:
+        for c in r:
+            if _row_has_year(str(c), year):
+                return True
+    return False
+
+
 def _find_value_in_table(
     table_2d: list[list[Any]],
     row_label_regex: str,
     year: int,
     prefer_actual: bool = True,
     label_cols: tuple[int, ...] = (0, 1),
-    require_year_col: bool = True,
+    require_year_col: bool = False,
 ) -> Optional[float]:
     """
     Finds a column for {year} (prefer "actual"), then finds a row whose label matches row_label_regex.
@@ -72,48 +178,69 @@ def _find_value_in_table(
     if not table_2d or not table_2d[0]:
         return None
 
-    header_raw = [str(c).strip() for c in table_2d[0]]
-    header = [h.lower() for h in header_raw]
-    year_s = str(year)
+    # Docling can emit multi-row headers; scan the first few rows for year columns.
+    header_rows = table_2d[: min(3, len(table_2d))]
+    max_cols = max(len(r) for r in header_rows)
+    header_cells_by_col: list[str] = []
+    for col in range(max_cols):
+        joined = " ".join(_normalize_text(r[col]) for r in header_rows if col < len(r)).strip()
+        header_cells_by_col.append(joined)
 
-    # choose column index only if year exists in header
-    candidates: list[int] = [i for i, h in enumerate(header) if year_s in h]
-    if not candidates:
-        if require_year_col:
-            return None
-        # if you REALLY want fallback behavior, set require_year_col=False
-        col_idx = len(header) - 1
-    else:
-        col_idx: Optional[int] = None
+    # choose column index by year; fallback to "actual/current", then right-most numeric in row.
+    candidates: list[int] = [
+        i for i, h in enumerate(header_cells_by_col) if _row_has_year(h, year)
+    ]
+    col_idx: Optional[int] = None
+    if candidates:
         if prefer_actual:
             for i in candidates:
-                if "actual" in header[i]:
+                if "actual" in header_cells_by_col[i]:
                     col_idx = i
                     break
         if col_idx is None:
             col_idx = candidates[0]
+    else:
+        fallback_candidates = [
+            i for i, h in enumerate(header_cells_by_col)
+            if ("actual" in h or "current" in h or "reporting" in h)
+        ]
+        if fallback_candidates:
+            col_idx = fallback_candidates[0]
+        elif require_year_col:
+            return None
 
     pat = re.compile(row_label_regex, re.IGNORECASE)
 
-    for r in table_2d[1:]:
+    for r in table_2d:
         if not r:
             continue
 
         # find label match in allowed label columns
         matched = False
-        for lc in label_cols:
+        matched_label_col: Optional[int] = None
+        for lc in (*label_cols, 2):
             if lc < len(r):
-                label = str(r[lc]).strip()
+                label = _normalize_text(r[lc])
                 if label and pat.search(label):
                     matched = True
+                    matched_label_col = lc
                     break
 
         if not matched:
             continue
 
-        if col_idx >= len(r):
-            return None
-        return _parse_number(r[col_idx])
+        if col_idx is not None and col_idx < len(r):
+            parsed = _parse_number(r[col_idx])
+            if parsed is not None:
+                return parsed
+
+        # fallback: choose right-most parseable number in row (excluding label cols)
+        for i in range(len(r) - 1, -1, -1):
+            if i in label_cols or i == matched_label_col:
+                continue
+            parsed = _parse_number(r[i])
+            if parsed is not None:
+                return parsed
 
     return None
 
@@ -174,10 +301,7 @@ def normalize_to_one_row(
     other_income_sales = None
 
     for ref, t2d in tables_2d.items():
-        # ✅ skip tables without year columns to avoid wrong matches (like "200,000 work hours")
-        header_join = " ".join([str(x) for x in (t2d[0] if t2d else [])]).lower()
-        if str(year) not in header_join:
-            continue
+        # 不强制要求表头必须有年份，先靠行标签匹配，再按年份/actual/current回退取值。
 
         # --- Scope 1/2 + methane (from metrics tables like #/tables/41 or #/tables/9) ---
         v = _find_value_in_table(t2d, r"\bScope\s*1\s+emissions\b", year, label_cols=(0, 1))
@@ -233,16 +357,10 @@ def normalize_to_one_row(
         revenue_million = revenues
 
     # Unit conversions to match your requested columns
-    def _convert(ref_label: str, raw_val: Optional[float], target_unit: str) -> Optional[float]:
-        if raw_val is None:
-            return None
-        m = _unit_multiplier_for_label(ref_label, target_unit)
-        return raw_val * m
-
-    # We need original labels for unit inference; easiest: hardcode based on your PDF
     scope1_tonnes = scope1_million * 1_000_000.0 if scope1_million is not None else None
     scope2_loc_tonnes = scope2_loc_million * 1_000_000.0 if scope2_loc_million is not None else None
     scope2_mkt_tonnes = scope2_mkt_million * 1_000_000.0 if scope2_mkt_million is not None else None
+    methane_tonnes = methane * 1_000_000.0 if methane is not None else None
     sox_tonnes = sox_kilotons * 1_000.0 if sox_kilotons is not None else None
     water_mgal = freshwater_withdraw_million_m3 * 264.172 if freshwater_withdraw_million_m3 is not None else None
 
@@ -272,7 +390,7 @@ def normalize_to_one_row(
         "Scope 3 GHG emissions_2 (Metric tonnes CO2e)": None,
         "Scope 3 GHG emissions_3 (Metric tonnes CO2e)": None,
 
-        "Methane Emissions (Metric tonnes CH4)": methane,
+        "Methane Emissions (Metric tonnes CH4)": methane_tonnes,
         "GHG emissions intensity (Metric Tonnes CO2e/million$)": ghg_intensity,
 
         "NOx emissions (Metric tonnes CO2e)": None,
@@ -310,56 +428,113 @@ def extract_all(pdf_path: str | Path, out_dir: str | Path, meta_extra: Optional[
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    DocumentConverter = _import_docling_converter()
-    converter = DocumentConverter()
-
-    result = converter.convert(pdf_path)
-    doc = getattr(result, "document", None)
-    if doc is None:
-        raise RuntimeError("Docling convert() did not return a document.")
-
-    # export doc dict
-    if hasattr(doc, "export_to_dict"):
-        doc_dict = doc.export_to_dict()
-    elif hasattr(doc, "to_dict"):
-        doc_dict = doc.to_dict()
-    else:
-        raise RuntimeError("Docling document has no export_to_dict()/to_dict().")
+    converter = _build_docling_converter()
 
     # import utils functions
     import get_tables  # from utils dir (sys.path injected)
+    extract_text_enabled = _env_flag("DOCLING_EXTRACT_TEXT", default=False)
+    if extract_text_enabled:
+        import get_text  # from utils dir
 
-    tables_out: Dict[str, Any] = get_tables.main(doc_dict)
-
-    # build ref->table map from doc_dict
-    table_list = doc_dict.get("tables", []) or []
-    table_by_ref = {t.get("self_ref"): t for t in table_list if isinstance(t, dict)}
+    # Process in small chunks to prevent OCR/Docling memory spikes on large PDFs.
+    # Set DOCLING_PAGE_CHUNK_SIZE=0 to force one-shot processing.
+    try:
+        chunk_size = int(os.getenv("DOCLING_PAGE_CHUNK_SIZE", "8"))
+    except ValueError:
+        chunk_size = 8
+    page_count = _get_pdf_page_count(pdf_path)
+    if chunk_size <= 0:
+        chunk_size = page_count
 
     extracted_table_objs: Dict[str, Dict[str, Any]] = {}
-    for ref in tables_out.get("all table refs", []):
-        t = table_by_ref.get(ref)
-        if not t:
-            continue
-        df = get_tables.extract_table_to_df(t)
-        data_2d = df.fillna("").astype(str).values.tolist()
+    per_keyword_refs: Dict[str, set[str]] = {}
+    all_refs: set[str] = set()
+    chunk_warnings: list[str] = []
+    texts_by_chunk: Dict[str, Any] = {}
 
-        extracted_table_objs[ref] = {
-            "num_rows": int(t.get("num_rows", df.shape[0])),
-            "num_cols": int(t.get("num_cols", df.shape[1])),
-            "data": data_2d,
-            "prov": t.get("prov", []),
-        }
+    with tempfile.TemporaryDirectory(prefix="docling_chunks_") as tmp_dir:
+        chunk_idx = 0
+        successful_chunks = 0
+        for start_page in range(0, page_count, chunk_size):
+            end_page = min(start_page + chunk_size, page_count)
+            chunk_pdf = Path(tmp_dir) / f"chunk_{chunk_idx}_{start_page+1}_{end_page}.pdf"
+            _write_pdf_page_range(pdf_path, start_page, end_page, chunk_pdf)
 
-    # attach extracted tables
-    tables_out["tables"] = extracted_table_objs
+            try:
+                result = converter.convert(str(chunk_pdf))
+                doc = getattr(result, "document", None)
+                if doc is None:
+                    raise RuntimeError("Docling convert() did not return a document.")
 
-    # texts are optional (avoid hard dependency on spacy/sentence-transformers)
-    texts_out: Dict[str, Any] = {}
-    try:
-        import get_text  # from utils dir
-        texts_out = get_text.main(doc_dict)
-    except Exception as e:
-        texts_out = {"warning": f"text extraction skipped: {e}"}
+                if hasattr(doc, "export_to_dict"):
+                    doc_dict = doc.export_to_dict()
+                elif hasattr(doc, "to_dict"):
+                    doc_dict = doc.to_dict()
+                else:
+                    raise RuntimeError("Docling document has no export_to_dict()/to_dict().")
+
+                tables_out_chunk: Dict[str, Any] = get_tables.main(doc_dict)
+                table_list = doc_dict.get("tables", []) or []
+                table_by_ref = {t.get("self_ref"): t for t in table_list if isinstance(t, dict)}
+
+                for k, refs in (tables_out_chunk.get("per keyword table refs", {}) or {}).items():
+                    per_keyword_refs.setdefault(k, set())
+                    for ref in refs:
+                        pref_ref = f"chunk{chunk_idx}:{ref}"
+                        per_keyword_refs[k].add(pref_ref)
+
+                for ref in tables_out_chunk.get("all table refs", []):
+                    t = table_by_ref.get(ref)
+                    if not t:
+                        continue
+                    df = get_tables.extract_table_to_df(t)
+                    data_2d = df.fillna("").astype(str).values.tolist()
+                    pref_ref = f"chunk{chunk_idx}:{ref}"
+                    all_refs.add(pref_ref)
+
+                    extracted_table_objs[pref_ref] = {
+                        "num_rows": int(t.get("num_rows", df.shape[0])),
+                        "num_cols": int(t.get("num_cols", df.shape[1])),
+                        "data": data_2d,
+                        "prov": t.get("prov", []),
+                        "page_range": [start_page + 1, end_page],
+                    }
+
+                if extract_text_enabled:
+                    try:
+                        texts_by_chunk[f"chunk{chunk_idx}"] = get_text.main(doc_dict)
+                    except Exception as text_err:
+                        texts_by_chunk[f"chunk{chunk_idx}"] = {"warning": f"text extraction skipped: {text_err}"}
+
+                successful_chunks += 1
+            except Exception as e:
+                chunk_warnings.append(
+                    f"chunk {chunk_idx} (pages {start_page+1}-{end_page}) failed: {e}"
+                )
+            finally:
+                chunk_idx += 1
+
+        if successful_chunks == 0:
+            raise RuntimeError(
+                "All PDF chunks failed during conversion. "
+                "Try reducing DOCLING_PAGE_CHUNK_SIZE (e.g., 1-4 pages)."
+            )
+
+    tables_out = {
+        "per keyword table refs": {k: sorted(list(v)) for k, v in per_keyword_refs.items()},
+        "all table refs": sorted(list(all_refs)),
+        "keywords missing tables": [
+            k for k, v in per_keyword_refs.items() if not v
+        ],
+        "tables": extracted_table_objs,
+    }
+
+    if chunk_warnings:
+        tables_out["warnings"] = chunk_warnings
+
+    texts_out: Dict[str, Any] = {"enabled": extract_text_enabled, "chunks": texts_by_chunk}
+    if chunk_warnings:
+        texts_out["warnings"] = chunk_warnings
 
     meta = {
         "input_pdf": pdf_path,
