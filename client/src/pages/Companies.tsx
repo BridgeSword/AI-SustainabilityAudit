@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { Building2, Plus, Search } from "lucide-react";
 import { createCompany, listCompanies, type ApiCompany } from "@/lib/api";
+import { mockCompanies } from "@/data/mockReports";
 
 interface Company {
   id: number;
@@ -35,9 +36,17 @@ const Companies = () => {
   const fetchCompanies = async () => {
     try {
       const data = await listCompanies();
-      setCompanies(data.map(normalizeCompany));
+      setCompanies(
+        data.length > 0
+          ? data.map(normalizeCompany)
+          : mockCompanies.map(normalizeCompany)
+      );
     } catch {
-      toast({ title: "Error", description: "Failed to fetch companies", variant: "destructive" });
+      setCompanies(mockCompanies.map(normalizeCompany));
+      toast({
+        title: "Demo data loaded",
+        description: "Backend is unavailable, so sample ESG companies are shown.",
+      });
     }
   };
 

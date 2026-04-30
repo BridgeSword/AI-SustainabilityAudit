@@ -57,6 +57,7 @@ import {
   type ApiCompany,
   type ApiReport,
 } from "@/lib/api";
+import { mockCompanies, mockReports } from "@/data/mockReports";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -72,9 +73,15 @@ interface ReportView {
   report_year: number;
   file_name: string | null;
   ghg_emissions: number | null;
+  esg_score?: number | null;
+  water_usage?: number | null;
+  energy_usage?: number | null;
+  renewable_energy_percentage?: number | null;
+  waste_generated?: number | null;
   company_id: number | null;
   company_name: string;
   extraction_status: string | null;
+  is_mock?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -128,41 +135,82 @@ const Reports = () => {
         listReports(),
       ]);
 
-      const normalized = companiesData.map((c) => ({
+      const normalized = (companiesData.length > 0 ? companiesData : mockCompanies).map((c) => ({
         id: c.id,
         name: c.name,
       }));
       const map = new Map(normalized.map((c) => [c.id, c.name]));
 
       setCompanies(normalized);
-      setReports(
-        reportsData.map((r) => ({
+      const normalizedReports =
+        reportsData.length > 0
+          ? reportsData.map((r) => ({
           id: r.id,
           report_year: r.year,
           file_name:
             (r.extracted_json?.file_name as string) || null,
           ghg_emissions: Number(r.extracted_json?.ghg_emissions) || null,
+          esg_score: Number(r.extracted_json?.esg_score) || null,
+          water_usage: Number(r.extracted_json?.water_withdrawal_m3) || null,
+          energy_usage: Number(r.extracted_json?.energy_consumption_mwh) || null,
+          renewable_energy_percentage:
+            Number(r.extracted_json?.renewable_energy_percentage) || null,
+          waste_generated: Number(r.extracted_json?.waste_generated_tonnes) || null,
           company_id: r.company_id,
           company_name: r.company_id
             ? map.get(r.company_id) || `Company #${r.company_id}`
             : "Unknown Company",
           extraction_status: r.extraction_status,
         }))
-      );
+          : mockReports.map((r) => ({
+              id: r.id,
+              report_year: r.year,
+              file_name: r.fileName,
+              ghg_emissions: r.carbonEmissions,
+              esg_score: r.esgScore,
+              water_usage: r.waterUsage,
+              energy_usage: r.energyUsage,
+              renewable_energy_percentage: r.renewableEnergyPercentage,
+              waste_generated: r.wasteGenerated,
+              company_id: r.companyId,
+              company_name: r.companyName,
+              extraction_status: "completed",
+              is_mock: true,
+            }));
+
+      setReports(normalizedReports);
 
       // Auto-expand all companies that have reports
       const companiesWithReports = new Set(
-        reportsData
+        normalizedReports
           .map((r) => r.company_id)
           .filter((id): id is number => id != null)
       );
       setExpandedCompanies(companiesWithReports);
     } catch (error) {
+      const normalized = mockCompanies.map((c) => ({ id: c.id, name: c.name }));
+      const normalizedReports = mockReports.map((r) => ({
+        id: r.id,
+        report_year: r.year,
+        file_name: r.fileName,
+        ghg_emissions: r.carbonEmissions,
+        esg_score: r.esgScore,
+        water_usage: r.waterUsage,
+        energy_usage: r.energyUsage,
+        renewable_energy_percentage: r.renewableEnergyPercentage,
+        waste_generated: r.wasteGenerated,
+        company_id: r.companyId,
+        company_name: r.companyName,
+        extraction_status: "completed",
+        is_mock: true,
+      }));
+      setCompanies(normalized);
+      setReports(normalizedReports);
+      setExpandedCompanies(new Set(normalizedReports.map((report) => report.company_id || 0)));
       toast({
-        title: "Error",
+        title: "Demo data loaded",
         description:
-          error instanceof Error ? error.message : "Failed to load data",
-        variant: "destructive",
+          error instanceof Error ? `Backend unavailable: ${error.message}` : "Backend unavailable",
       });
     }
   };
@@ -486,6 +534,8 @@ const Reports = () => {
                           <TableHead className="w-40">
                             GHG Emissions
                           </TableHead>
+                          <TableHead className="w-24">ESG</TableHead>
+                          <TableHead className="w-28">Renewable</TableHead>
                           <TableHead className="w-32">Status</TableHead>
                           <TableHead className="w-32 text-right">
                             Actions
@@ -499,20 +549,35 @@ const Reports = () => {
                               {report.report_year}
                             </TableCell>
                             <TableCell>
-                              <a
-                                href={getPdfDownloadUrl(report.id)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1.5 text-primary underline-offset-4 hover:underline"
-                              >
-                                <FileDown className="h-4 w-4" />
-                                {report.file_name || "Unnamed Report"}
-                              </a>
+                              {report.is_mock ? (
+                                <span className="inline-flex items-center gap-1.5">
+                                  <FileDown className="h-4 w-4 text-muted-foreground" />
+                                  {report.file_name || "Demo Report"}
+                                </span>
+                              ) : (
+                                <a
+                                  href={getPdfDownloadUrl(report.id)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 text-primary underline-offset-4 hover:underline"
+                                >
+                                  <FileDown className="h-4 w-4" />
+                                  {report.file_name || "Unnamed Report"}
+                                </a>
+                              )}
                             </TableCell>
                             <TableCell>
                               {report.ghg_emissions != null
                                 ? `${report.ghg_emissions.toLocaleString()} tCO\u2082e`
                                 : "—"}
+                            </TableCell>
+                            <TableCell>
+                              {report.esg_score != null ? report.esg_score : "-"}
+                            </TableCell>
+                            <TableCell>
+                              {report.renewable_energy_percentage != null
+                                ? `${report.renewable_energy_percentage}%`
+                                : "-"}
                             </TableCell>
                             <TableCell>
                               {report.extraction_status === "completed" ? (
@@ -542,6 +607,7 @@ const Reports = () => {
                                   className="h-8 w-8 p-0"
                                   title="Edit report"
                                   onClick={() => openEdit(report)}
+                                  disabled={report.is_mock}
                                 >
                                   <Pencil className="h-4 w-4" />
                                 </Button>
@@ -551,6 +617,7 @@ const Reports = () => {
                                   className="h-8 w-8 p-0 text-destructive hover:text-destructive"
                                   title="Delete report"
                                   onClick={() => openDelete(report)}
+                                  disabled={report.is_mock}
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>

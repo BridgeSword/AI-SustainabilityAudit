@@ -45,6 +45,7 @@ import {
   replacePdf,
   deleteReport,
 } from "@/lib/api";
+import { mockCompanies, mockReports, type MockReport } from "@/data/mockReports";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:9092").replace(/\/$/, "");
 
@@ -63,7 +64,42 @@ interface Report {
   extraction_status?: string | null;
   scoring_status?: string | null;
   anomaly_status?: string | null;
+  esg_score?: number;
+  carbon_emissions?: number;
+  water_usage?: number;
+  energy_usage?: number;
+  renewable_energy_percentage?: number;
+  waste_generated?: number;
+  is_mock?: boolean;
 }
+
+const mockReportToView = (report: MockReport): Report => ({
+  id: report.id,
+  report_year: report.year,
+  file_name: report.fileName,
+  company_id: report.companyId,
+  extraction_status: "completed",
+  scoring_status: "completed",
+  anomaly_status: report.anomalyNotes.length > 0 ? "flagged" : "clear",
+  esg_score: report.esgScore,
+  carbon_emissions: report.carbonEmissions,
+  water_usage: report.waterUsage,
+  energy_usage: report.energyUsage,
+  renewable_energy_percentage: report.renewableEnergyPercentage,
+  waste_generated: report.wasteGenerated,
+  is_mock: true,
+  report_data: {
+    file_name: report.fileName,
+    esg_score: report.esgScore,
+    ghg_emissions: report.carbonEmissions,
+    energy_consumption_mwh: report.energyUsage,
+    water_withdrawal_m3: report.waterUsage,
+    waste_generated_tonnes: report.wasteGenerated,
+    renewable_energy_percentage: report.renewableEnergyPercentage,
+    anomaly_notes: report.anomalyNotes,
+    extraction_method: "Vercel demo mock data",
+  },
+});
 
 const InnovativeActionDetect = () => {
   const { companyId } = useParams<{ companyId: string }>();
@@ -131,18 +167,25 @@ const InnovativeActionDetect = () => {
     setIsLoadingCompanies(true);
     try {
       const data = await listCompanies();
+      const source = data.length > 0 ? data : mockCompanies;
       setCompanies(
-        data.map((c) => ({
+        source.map((c) => ({
           id: c.id,
           name: c.name,
           industry: c.sector,
         }))
       );
     } catch {
+      setCompanies(
+        mockCompanies.map((c) => ({
+          id: c.id,
+          name: c.name,
+          industry: c.sector,
+        }))
+      );
       toast({
-        title: "Error",
-        description: "Failed to load companies",
-        variant: "destructive",
+        title: "Demo data loaded",
+        description: "Backend is unavailable, so sample ESG companies are shown.",
       });
     } finally {
       setIsLoadingCompanies(false);
@@ -164,17 +207,40 @@ const InnovativeActionDetect = () => {
           extraction_status: r.extraction_status,
           scoring_status: r.scoring_status,
           anomaly_status: r.anomaly_status,
+          esg_score: Number(r.extracted_json?.esg_score) || undefined,
+          carbon_emissions: Number(r.extracted_json?.ghg_emissions) || undefined,
+          water_usage: Number(r.extracted_json?.water_withdrawal_m3) || undefined,
+          energy_usage: Number(r.extracted_json?.energy_consumption_mwh) || undefined,
+          renewable_energy_percentage:
+            Number(r.extracted_json?.renewable_energy_percentage) || undefined,
+          waste_generated: Number(r.extracted_json?.waste_generated_tonnes) || undefined,
         }))
         .sort((a, b) =>
           sortAscending ? a.report_year - b.report_year : b.report_year - a.report_year
         );
 
-      setReports(filtered);
+      setReports(
+        filtered.length > 0
+          ? filtered
+          : mockReports
+              .filter((report) => report.companyId === id)
+              .map(mockReportToView)
+              .sort((a, b) =>
+                sortAscending ? a.report_year - b.report_year : b.report_year - a.report_year
+              )
+      );
     } catch {
+      setReports(
+        mockReports
+          .filter((report) => report.companyId === id)
+          .map(mockReportToView)
+          .sort((a, b) =>
+            sortAscending ? a.report_year - b.report_year : b.report_year - a.report_year
+          )
+      );
       toast({
-        title: "Error",
-        description: "Failed to load reports",
-        variant: "destructive",
+        title: "Demo reports loaded",
+        description: "Backend is unavailable, so sample ESG reports are shown.",
       });
     } finally {
       setIsLoadingReports(false);
@@ -583,6 +649,9 @@ const InnovativeActionDetect = () => {
                       <TableRow>
                         <TableHead>Year</TableHead>
                         <TableHead>Report Name</TableHead>
+                        <TableHead>ESG</TableHead>
+                        <TableHead>Carbon</TableHead>
+                        <TableHead>Renewable</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
@@ -612,15 +681,33 @@ const InnovativeActionDetect = () => {
                                 {report.report_year}
                               </TableCell>
                               <TableCell>
-                                <a
-                                  href={getPdfDownloadUrl(report.id)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
-                                >
-                                  <FileDown className="h-4 w-4" />
-                                  {report.file_name || "Unnamed Report"}
-                                </a>
+                                {report.is_mock ? (
+                                  <span className="inline-flex items-center gap-1 text-foreground">
+                                    <FileDown className="h-4 w-4 text-muted-foreground" />
+                                    {report.file_name || "Demo Report"}
+                                  </span>
+                                ) : (
+                                  <a
+                                    href={getPdfDownloadUrl(report.id)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 text-primary underline-offset-4 hover:underline"
+                                  >
+                                    <FileDown className="h-4 w-4" />
+                                    {report.file_name || "Unnamed Report"}
+                                  </a>
+                                )}
+                              </TableCell>
+                              <TableCell>{report.esg_score ?? "-"}</TableCell>
+                              <TableCell>
+                                {report.carbon_emissions
+                                  ? `${report.carbon_emissions.toLocaleString()} tCO2e`
+                                  : "-"}
+                              </TableCell>
+                              <TableCell>
+                                {report.renewable_energy_percentage
+                                  ? `${report.renewable_energy_percentage}%`
+                                  : "-"}
                               </TableCell>
                               <TableCell>
                                 {report.extraction_status === "processing" ? (
@@ -678,6 +765,7 @@ const InnovativeActionDetect = () => {
                                     className="h-8 w-8 p-0"
                                     title="Edit report"
                                     onClick={() => openEdit(report)}
+                                    disabled={report.is_mock}
                                   >
                                     <Pencil className="h-4 w-4" />
                                   </Button>
@@ -687,6 +775,7 @@ const InnovativeActionDetect = () => {
                                     className="h-8 w-8 p-0 text-destructive hover:text-destructive"
                                     title="Delete report"
                                     onClick={() => openDelete(report)}
+                                    disabled={report.is_mock}
                                   >
                                     <Trash2 className="h-4 w-4" />
                                   </Button>
@@ -854,6 +943,16 @@ const InnovativeActionDetect = () => {
                         key: "waste_generated_tonnes",
                         unit: "tonnes",
                       },
+                      {
+                        label: "Renewable Energy",
+                        key: "renewable_energy_percentage",
+                        unit: "%",
+                      },
+                      {
+                        label: "ESG Score",
+                        key: "esg_score",
+                        unit: "/100",
+                      },
                     ].map(({ label, key, unit }) => {
                       const val =
                         selectedReport.report_data?.[key];
@@ -907,6 +1006,21 @@ const InnovativeActionDetect = () => {
                     })}
                   </div>
                 </div>
+
+                {Array.isArray(selectedReport.report_data?.anomaly_notes) && (
+                  <div>
+                    <h3 className="mb-3 text-lg font-semibold">
+                      Anomaly Notes
+                    </h3>
+                    <Card className="p-4">
+                      <ul className="space-y-2 text-sm text-muted-foreground">
+                        {selectedReport.report_data.anomaly_notes.map((note: string) => (
+                          <li key={note}>{note}</li>
+                        ))}
+                      </ul>
+                    </Card>
+                  </div>
+                )}
 
                 {/* Extracted Text */}
                 {selectedReport.report_data?.full_text && (

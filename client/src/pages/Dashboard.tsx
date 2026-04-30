@@ -1,87 +1,347 @@
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import Navigation from "@/components/layout/Navigation";
 import ReportsChat from "@/components/dashboard/ReportsChat";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { BarChart3, FileText, TrendingDown, ArrowLeft } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { useToast } from "@/hooks/use-toast";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Activity,
+  ArrowLeft,
+  Droplets,
+  Factory,
+  Leaf,
+  Recycle,
+} from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import { listCompanies, listReports } from "@/lib/api";
+import { mockCompanies, mockReports, type MockReport } from "@/data/mockReports";
 
-interface DashboardStats { totalReports: number; avgEmissions: number; latestYear: number; }
-interface YearlyEmissions { year: number; emissions: number; }
-interface Company { id: number; name: string; industry: string | null; }
+interface Company {
+  id: number;
+  name: string;
+  industry: string | null;
+}
 
-const INDUSTRY_STANDARDS: Record<string, number> = { "Oil & Gas": 15000, Manufacturing: 8000, Technology: 3000, Retail: 2000, Finance: 1500, default: 5000 };
+const formatNumber = (value: number) => value.toLocaleString();
+
+const reportFromApi = (
+  report: Awaited<ReturnType<typeof listReports>>[number],
+  company: Company
+): MockReport => {
+  const data = report.extracted_json || {};
+  const carbonEmissions = Number(data.ghg_emissions) || 0;
+  const waterUsage = Number(data.water_withdrawal_m3) || 0;
+  const energyUsage = Number(data.energy_consumption_mwh) || 0;
+  const renewableEnergyPercentage = Number(data.renewable_energy_percentage) || 0;
+  const wasteGenerated = Number(data.waste_generated_tonnes) || 0;
+
+  return {
+    id: report.id,
+    companyId: company.id,
+    companyName: company.name,
+    sector: company.industry || "Unspecified",
+    country: "",
+    year: report.year,
+    esgScore: Number(data.esg_score) || 0,
+    carbonEmissions,
+    waterUsage,
+    energyUsage,
+    renewableEnergyPercentage,
+    wasteGenerated,
+    anomalyNotes: Array.isArray(data.anomaly_notes)
+      ? data.anomaly_notes.map(String)
+      : [],
+    fileName: String(data.file_name || `Sustainability Report ${report.year}`),
+    timeSeries: [
+      {
+        year: report.year,
+        esgScore: Number(data.esg_score) || 0,
+        carbonEmissions,
+        waterUsage,
+        energyUsage,
+        renewableEnergyPercentage,
+        wasteGenerated,
+      },
+    ],
+  };
+};
 
 const Dashboard = () => {
   const { companyId } = useParams();
-  const numericCompanyId = useMemo(() => Number(companyId), [companyId]);
-  const { toast } = useToast();
-  const [company, setCompany] = useState<Company | null>(null);
-  const [stats, setStats] = useState<DashboardStats>({ totalReports: 0, avgEmissions: 0, latestYear: 0 });
-  const [emissionsData, setEmissionsData] = useState<YearlyEmissions[]>([]);
-  const [comparisonResult, setComparisonResult] = useState<string | null>(null);
+  const numericCompanyId = useMemo(() => Number(companyId || mockReports[0].companyId), [companyId]);
 
-  useEffect(() => { if (numericCompanyId) void fetchDashboardData(); }, [numericCompanyId]);
+  const [company, setCompany] = useState<Company | null>(null);
+  const [reports, setReports] = useState<MockReport[]>([]);
+  const [isMockData, setIsMockData] = useState(false);
+
+  useEffect(() => {
+    void fetchDashboardData();
+  }, [numericCompanyId]);
+
+  const useMockDashboard = () => {
+    const selected =
+      mockReports.find((report) => report.companyId === numericCompanyId) || mockReports[0];
+    setCompany({
+      id: selected.companyId,
+      name: selected.companyName,
+      industry: selected.sector,
+    });
+    setReports(mockReports.filter((report) => report.companyId === selected.companyId));
+    setIsMockData(true);
+  };
 
   const fetchDashboardData = async () => {
     try {
-      const [companies, reports] = await Promise.all([listCompanies(), listReports()]);
-      const selectedCompany = companies.find((c) => c.id === numericCompanyId);
-      setCompany(selectedCompany ? { id: selectedCompany.id, name: selectedCompany.name, industry: selectedCompany.sector } : null);
+      const [companiesData, reportsData] = await Promise.all([listCompanies(), listReports()]);
+      const normalizedCompanies = companiesData.map((item) => ({
+        id: item.id,
+        name: item.name,
+        industry: item.sector,
+      }));
+      const selectedCompany =
+        normalizedCompanies.find((item) => item.id === numericCompanyId) || null;
+      const targetReports = selectedCompany
+        ? reportsData
+            .filter((report) => report.company_id === selectedCompany.id)
+            .map((report) => reportFromApi(report, selectedCompany))
+        : [];
 
-      const targetReports = reports.filter((r) => r.company_id === numericCompanyId);
-      if (targetReports.length === 0) {
-        setStats({ totalReports: 0, avgEmissions: 0, latestYear: 0 });
-        setEmissionsData([]);
+      if (!selectedCompany || targetReports.length === 0) {
+        useMockDashboard();
         return;
       }
 
-      const parsed = targetReports.map((r) => ({ year: r.year, emissions: Number(r.extracted_json?.ghg_emissions) || 0 }));
-      const avgEmissions = parsed.reduce((acc, r) => acc + r.emissions, 0) / parsed.length;
-      const latestYear = Math.max(...parsed.map((r) => r.year));
-
-      setStats({ totalReports: parsed.length, avgEmissions, latestYear });
-      setEmissionsData(parsed.sort((a, b) => a.year - b.year));
-    } catch (error) {
-      toast({ title: "Error", description: error instanceof Error ? error.message : "Failed to load dashboard", variant: "destructive" });
+      setCompany(selectedCompany);
+      setReports(targetReports.sort((a, b) => b.year - a.year));
+      setIsMockData(false);
+    } catch {
+      useMockDashboard();
     }
   };
 
-  const handleCompare = () => {
-    if (!company || emissionsData.length === 0) return;
-    const latestData = emissionsData[emissionsData.length - 1];
-    const standard = INDUSTRY_STANDARDS[company.industry || ""] || INDUSTRY_STANDARDS.default;
-    const difference = latestData.emissions - standard;
-    const percentDiff = ((difference / standard) * 100).toFixed(1);
-    const result = difference > 0
-      ? `⚠️ ${company.name} is ${Math.abs(difference).toFixed(0)} tCO₂e (${percentDiff}%) ABOVE the industry standard of ${standard} tCO₂e for ${latestData.year}.`
-      : `✅ ${company.name} is ${Math.abs(difference).toFixed(0)} tCO₂e (${Math.abs(Number(percentDiff))}%) BELOW the industry standard of ${standard} tCO₂e for ${latestData.year}.`;
-    setComparisonResult(result);
-  };
+  const latestReport = reports[0] || mockReports[0];
+  const timeSeries = latestReport.timeSeries;
+  const peerComparison = mockReports.map((report) => ({
+    company: report.companyName,
+    esgScore: report.esgScore,
+    carbonEmissions: report.carbonEmissions,
+    renewableEnergyPercentage: report.renewableEnergyPercentage,
+  }));
 
-  if (!companyId) return <div className="min-h-screen bg-background"><Navigation /><main className="container mx-auto px-4 py-8"><p className="text-center text-muted-foreground">No company selected</p></main></div>;
+  const summaryCards = [
+    {
+      title: "ESG Score",
+      value: latestReport.esgScore ? `${latestReport.esgScore}/100` : "N/A",
+      icon: Activity,
+      detail: `${latestReport.year} disclosure`,
+    },
+    {
+      title: "Carbon Emissions",
+      value: `${formatNumber(latestReport.carbonEmissions)} tCO2e`,
+      icon: Factory,
+      detail: "Scope 1, 2 and 3 total",
+    },
+    {
+      title: "Renewable Energy",
+      value: `${latestReport.renewableEnergyPercentage}%`,
+      icon: Leaf,
+      detail: "Share of electricity mix",
+    },
+    {
+      title: "Water Usage",
+      value: `${formatNumber(latestReport.waterUsage)} m3`,
+      icon: Droplets,
+      detail: "Annual withdrawal",
+    },
+  ];
 
   return (
     <div className="min-h-screen bg-background">
       <Navigation />
       <main className="container mx-auto px-4 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2">
-            <Button variant="ghost" className="mb-4 gap-2" asChild><a href="/companies"><ArrowLeft className="h-4 w-4" />Back to Companies</a></Button>
-            <h1 className="text-4xl font-bold text-foreground mb-2">{company?.name || "Loading..."} Dashboard</h1>
-            <p className="text-muted-foreground mb-8">{company?.industry ? `${company.industry} • ` : ""}Sustainability metrics and industry comparison</p>
-            <div className="grid gap-6 md:grid-cols-3 mb-8">
-              <Card><CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium">Total Reports</CardTitle><FileText className="h-4 w-4 text-muted-foreground" /></CardHeader><CardContent><div className="text-3xl font-bold text-primary">{stats.totalReports}</div></CardContent></Card>
-              <Card><CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium">Avg. Emissions</CardTitle><TrendingDown className="h-4 w-4 text-muted-foreground" /></CardHeader><CardContent><div className="text-3xl font-bold text-primary">{stats.avgEmissions.toFixed(0)} <span className="text-sm font-normal text-muted-foreground">tCO₂e</span></div></CardContent></Card>
-              <Card><CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium">Latest Year</CardTitle><BarChart3 className="h-4 w-4 text-muted-foreground" /></CardHeader><CardContent><div className="text-3xl font-bold text-primary">{stats.latestYear || "—"}</div></CardContent></Card>
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div>
+            <Button variant="ghost" className="mb-4 gap-2" asChild>
+              <Link to="/companies">
+                <ArrowLeft className="h-4 w-4" />
+                Back to Companies
+              </Link>
+            </Button>
+
+            <div className="mb-6 flex flex-col justify-between gap-3 md:flex-row md:items-end">
+              <div>
+                <h1 className="text-4xl font-bold text-foreground">
+                  {company?.name || "Sustainability"} Dashboard
+                </h1>
+                <p className="mt-2 text-muted-foreground">
+                  {company?.industry ? `${company.industry} sector ESG performance` : "ESG performance"}
+                </p>
+              </div>
+              {isMockData && (
+                <span className="w-fit rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
+                  Demo data
+                </span>
+              )}
             </div>
-            <Card className="mb-8"><CardHeader><CardTitle>GHG Emissions Over Time</CardTitle><CardDescription>Yearly emissions trend for {company?.name}</CardDescription></CardHeader><CardContent>{emissionsData.length > 0 ? <ResponsiveContainer width="100%" height={400}><BarChart data={emissionsData}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="year" /><YAxis /><Tooltip /><Legend /><Bar dataKey="emissions" fill="hsl(var(--primary))" name="Emissions (tCO₂e)" /></BarChart></ResponsiveContainer> : <div className="flex h-[400px] items-center justify-center text-muted-foreground">No emissions data available yet. Add reports to see analytics.</div>}</CardContent></Card>
-            {emissionsData.length > 0 && <Card><CardHeader><CardTitle>Industry Standard Comparison</CardTitle></CardHeader><CardContent className="space-y-4"><Button onClick={handleCompare}>Compare to Industry Standard</Button>{comparisonResult && <div className="mt-4 p-4 rounded-lg bg-muted"><p className="text-sm font-medium">{comparisonResult}</p></div>}</CardContent></Card>}
+
+            <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {summaryCards.map(({ title, value, detail, icon: Icon }) => (
+                <Card key={title}>
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">{title}</CardTitle>
+                    <Icon className="h-4 w-4 text-muted-foreground" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold text-primary">{value}</div>
+                    <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            <div className="mb-6 grid gap-6 xl:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Peer Comparison</CardTitle>
+                  <CardDescription>ESG score and renewable energy performance</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={320}>
+                    <BarChart data={peerComparison}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="company" tick={{ fontSize: 12 }} />
+                      <YAxis />
+                      <Tooltip />
+                      <Legend />
+                      <Bar dataKey="esgScore" fill="hsl(var(--primary))" name="ESG score" />
+                      <Bar
+                        dataKey="renewableEnergyPercentage"
+                        fill="hsl(var(--secondary))"
+                        name="Renewable energy %"
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Time Series</CardTitle>
+                  <CardDescription>Carbon emissions trend for {latestReport.companyName}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ResponsiveContainer width="100%" height={320}>
+                    <LineChart data={timeSeries}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="year" />
+                      <YAxis />
+                      <Tooltip />
+                      <Legend />
+                      <Line
+                        type="monotone"
+                        dataKey="carbonEmissions"
+                        stroke="hsl(var(--primary))"
+                        strokeWidth={2}
+                        name="Carbon emissions (tCO2e)"
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="esgScore"
+                        stroke="hsl(var(--secondary))"
+                        strokeWidth={2}
+                        name="ESG score"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card className="mb-6">
+              <CardHeader>
+                <CardTitle>Report Table</CardTitle>
+                <CardDescription>Hardcoded demo reports with sustainability metrics</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Company</TableHead>
+                      <TableHead>Year</TableHead>
+                      <TableHead>ESG</TableHead>
+                      <TableHead>Carbon</TableHead>
+                      <TableHead>Water</TableHead>
+                      <TableHead>Energy</TableHead>
+                      <TableHead>Renewable</TableHead>
+                      <TableHead>Waste</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {mockReports.map((report) => (
+                      <TableRow key={report.id}>
+                        <TableCell className="font-medium">{report.companyName}</TableCell>
+                        <TableCell>{report.year}</TableCell>
+                        <TableCell>{report.esgScore}</TableCell>
+                        <TableCell>{formatNumber(report.carbonEmissions)} tCO2e</TableCell>
+                        <TableCell>{formatNumber(report.waterUsage)} m3</TableCell>
+                        <TableCell>{formatNumber(report.energyUsage)} MWh</TableCell>
+                        <TableCell>{report.renewableEnergyPercentage}%</TableCell>
+                        <TableCell>{formatNumber(report.wasteGenerated)} t</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Anomaly Notes</CardTitle>
+                <CardDescription>Review flags for the latest selected report</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {latestReport.anomalyNotes.map((note) => (
+                    <div key={note} className="flex gap-3 rounded-md border p-3">
+                      <Recycle className="mt-0.5 h-4 w-4 flex-none text-primary" />
+                      <p className="text-sm text-muted-foreground">{note}</p>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
           </div>
-          <div className="lg:col-span-1"><div className="sticky top-8 h-[calc(100vh-6rem)]"><ReportsChat companyId={companyId} /></div></div>
+
+          <div className="min-h-[560px]">
+            <div className="sticky top-8 h-[calc(100vh-6rem)]">
+              <ReportsChat companyId={String(numericCompanyId || mockCompanies[0].id)} />
+            </div>
+          </div>
         </div>
       </main>
     </div>
