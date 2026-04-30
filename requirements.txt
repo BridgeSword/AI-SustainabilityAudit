@@ -1,0 +1,17 @@
+# Core web framework
+fastapi>=0.115.0,<0.116.0
+uvicorn>=0.34.0,<0.35.0
+python-multipart>=0.0.20,<0.0.21
+
+# Database
+sqlalchemy>=2.0.0,<3.0.0
+psycopg2-binary>=2.9.9,<3.0.0
+pgvector>=0.3.0,<0.4.0
+
+# AWS / Aurora IAM Authentication
+boto3>=1.35.0,<2.0.0
+
+# Utilities
+pydantic-settings>=2.7.1,<3.0.0
+python-dotenv>=1.0.1,<2.0.0
+httpx>=0.28.1,<0.29.0
