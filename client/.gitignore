@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Frontend source helpers live under src/lib; keep them visible even though
+# the repository root ignores Python packaging lib/ folders.
+!src/lib/
+!src/lib/pdfExtractor.ts
+!src/lib/esgParser.ts

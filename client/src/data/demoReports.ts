@@ -31,6 +31,8 @@ interface NeonReportRow {
   anomalies?: unknown;
   time_series?: unknown;
   peer_comparison?: unknown;
+  file_name?: string | null;
+  extracted_text_preview?: string | null;
 }
 
 interface NeonReportsResponse {
@@ -63,13 +65,16 @@ const normalizePeerComparison = (value: unknown, fallbackReport: MockReport) => 
       if (!item || typeof item !== "object") return null;
       const row = item as Record<string, unknown>;
       const renewableEnergyPercentage = toNumber(
-        row.renewableEnergyPercentage ?? row.renewable_energy_percentage ?? row.renewable_energy_percent
+        row.renewableEnergyPercentage ??
+          row.renewableEnergyPercent ??
+          row.renewable_energy_percentage ??
+          row.renewable_energy_percent
       );
 
       return {
         company: String(row.company ?? row.companyName ?? row.company_name ?? "Peer"),
-        esgScore: toNumber(row.esgScore ?? row.esg_score),
-        carbonEmissions: toNumber(row.carbonEmissions ?? row.carbon_emissions),
+        esgScore: toNumber(row.esgScore ?? row.esg_score ?? row.score),
+        carbonEmissions: toNumber(row.carbonEmissions ?? row.carbon_emissions ?? row.emissions),
         renewableEnergyPercentage,
         renewableEnergyPercent: renewableEnergyPercentage,
       };
@@ -94,15 +99,20 @@ const normalizeTimeSeries = (value: unknown, fallbackReport: MockReport) => {
     .map((item) => {
       if (!item || typeof item !== "object") return null;
       const row = item as Record<string, unknown>;
-      const energyUsage = toNumber(row.energyUsage ?? row.energy_consumption ?? row.energy_consumption_mwh);
+      const energyUsage = toNumber(
+        row.energyUsage ?? row.energyConsumption ?? row.energy_consumption ?? row.energy_consumption_mwh
+      );
       const renewableEnergyPercentage = toNumber(
-        row.renewableEnergyPercentage ?? row.renewable_energy_percentage ?? row.renewable_energy_percent
+        row.renewableEnergyPercentage ??
+          row.renewableEnergyPercent ??
+          row.renewable_energy_percentage ??
+          row.renewable_energy_percent
       );
 
       return {
         year: toNumber(row.year ?? row.report_year),
         esgScore: toNumber(row.esgScore ?? row.esg_score),
-        carbonEmissions: toNumber(row.carbonEmissions ?? row.carbon_emissions ?? row.ghg_emissions),
+        carbonEmissions: toNumber(row.carbonEmissions ?? row.carbon_emissions ?? row.ghg_emissions ?? row.emissions),
         waterUsage: toNumber(row.waterUsage ?? row.water_usage ?? row.water_withdrawal_m3),
         energyUsage,
         energyConsumption: energyUsage,
@@ -203,7 +213,7 @@ const normalizeNeonReports = (rows: NeonReportRow[]): MockReport[] => {
       renewableEnergyPercent: renewableEnergyPercentage,
       wasteGenerated: toNumber(row.waste_generated),
       anomalyNotes: normalizeNotes(row.anomalies),
-      fileName: `${companyName.replace(/\s+/g, "-")}-${row.report_year || "ESG"}-Report.pdf`,
+      fileName: row.file_name || `${companyName.replace(/\s+/g, "-")}-${row.report_year || "ESG"}-Report.pdf`,
       timeSeries: [],
       peerComparison: [],
     };

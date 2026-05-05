@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Card,
+  CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
@@ -54,6 +55,7 @@ import {
   getPdfDownloadUrl,
 } from "@/lib/api";
 import { fetchDemoReportsDataset, type ReportDataSource } from "@/data/demoReports";
+import PdfExtractionUpload from "@/components/PdfExtractionUpload";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -431,6 +433,10 @@ const Reports = () => {
               </form>
             </DialogContent>
           </Dialog>
+        </div>
+
+        <div className="mb-6">
+          <PdfExtractionUpload onReportCreated={fetchData} />
         </div>
 
         {/* Company folder list */}
