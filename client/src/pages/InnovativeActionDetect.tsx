@@ -35,8 +35,6 @@ import Navigation from "@/components/layout/Navigation";
 import SectorRankingChat from "@/components/sector-ranking/SectorRankingChat";
 import {
   createCompany,
-  createReport,
-  uploadReportPdf,
   getPdfDownloadUrl,
   fixStuckReport,
   updateReport,
@@ -45,8 +43,13 @@ import {
 } from "@/lib/api";
 import { type MockReport } from "@/data/mockReports";
 import { fetchDemoReportsDataset, type ReportDataSource } from "@/data/demoReports";
+import { extractTextFromPdf } from "@/lib/pdfExtractor";
+import { parseEsgReportFromText } from "@/lib/esgParser";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:9092").replace(/\/$/, "");
+const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE_URL = /localhost|127\.0\.0\.1/.test(rawApiBaseUrl)
+  ? ""
+  : rawApiBaseUrl.replace(/\/$/, "");
 
 interface Company {
   id: number;
@@ -266,37 +269,51 @@ const InnovativeActionDetect = () => {
       });
     }
 
+    if (!selectedFile) {
+      return toast({
+        title: "Validation Error",
+        description: "Please select a PDF file first.",
+        variant: "destructive",
+      });
+    }
+
     try {
       setIsUploadingReport(true);
       setCurrentJobId(null);
-      setCurrentJobStatus("creating");
+      setCurrentJobStatus("extracting");
 
-      const report = await createReport({
-        company_id: numericCompanyId,
-        year: parseInt(newReportYear, 10),
-        extracted_json: {
-          file_name: selectedFile?.name || `Report ${newReportYear}`,
+      const text = await extractTextFromPdf(selectedFile);
+
+      if (!text.trim()) {
+        throw new Error("No selectable text found in this PDF. It may be a scanned PDF.");
+      }
+
+      setCurrentJobStatus("saving");
+      const parsedReport = parseEsgReportFromText(text, selectedFile.name);
+      const response = await fetch("/api/create-report", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify({
+          ...parsedReport,
+          companyName: selectedCompany?.name || parsedReport.companyName,
+          year: Number(newReportYear) || parsedReport.year,
+          fileName: selectedFile.name,
+          extractedTextPreview: text.slice(0, 1500),
+        }),
       });
 
-      if (selectedFile) {
-        const uploadResp = await uploadReportPdf(report.id, selectedFile);
-        const jobId = uploadResp.job_id;
-
-        setCurrentJobId(jobId);
-        setCurrentJobStatus("processing");
-
-        toast({
-          title: "Processing started",
-          description: "PDF uploaded. Waiting for extraction result...",
-        });
-
-        await pollUploadJob(jobId, report.id);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || "Failed to create report.");
       }
+
+      await response.json();
 
       toast({
         title: "Success",
-        description: "Report added and processed successfully",
+        description: "PDF extracted and saved to Neon.",
       });
 
       setAddReportOpen(false);

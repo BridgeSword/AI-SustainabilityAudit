@@ -47,15 +47,15 @@ import {
   Upload,
 } from "lucide-react";
 import {
-  createReport,
   deleteReport,
   replacePdf,
   updateReport,
-  uploadReportPdf,
   getPdfDownloadUrl,
 } from "@/lib/api";
 import { fetchDemoReportsDataset, type ReportDataSource } from "@/data/demoReports";
 import PdfExtractionUpload from "@/components/PdfExtractionUpload";
+import { extractTextFromPdf } from "@/lib/pdfExtractor";
+import { parseEsgReportFromText } from "@/lib/esgParser";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -104,6 +104,7 @@ const Reports = () => {
     report_year: new Date().getFullYear(),
     ghg_emissions: "",
   });
+  const [isAddingReport, setIsAddingReport] = useState(false);
 
   /* ---- edit dialog ---- */
   const [editOpen, setEditOpen] = useState(false);
@@ -204,25 +205,56 @@ const Reports = () => {
   /* ---- add report ---- */
   const handleAddReport = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.company_id) return;
+    if (!formData.company_id) {
+      toast({
+        title: "Error",
+        description: "Please select a company.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!selectedFile) {
+      toast({
+        title: "Error",
+        description: "Please select a PDF file first.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     try {
-      const report = await createReport({
-        company_id: parseInt(formData.company_id, 10),
-        year: formData.report_year,
-        extracted_json: {
-          ghg_emissions: formData.ghg_emissions
-            ? parseFloat(formData.ghg_emissions)
-            : null,
-          file_name: selectedFile?.name ?? null,
-        },
-      });
+      setIsAddingReport(true);
+      const text = await extractTextFromPdf(selectedFile);
 
-      if (selectedFile) {
-        await uploadReportPdf(report.id, selectedFile);
+      if (!text.trim()) {
+        throw new Error("No selectable text found in this PDF. It may be a scanned PDF.");
       }
 
-      toast({ title: "Success", description: "Report added" });
+      const parsedReport = parseEsgReportFromText(text, selectedFile.name);
+      const selectedCompany = companies.find((company) => company.id.toString() === formData.company_id);
+      const response = await fetch("/api/create-report", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          ...parsedReport,
+          companyName: selectedCompany?.name || parsedReport.companyName,
+          year: Number(formData.report_year) || parsedReport.year,
+          fileName: selectedFile.name,
+          extractedTextPreview: text.slice(0, 1500),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || "Failed to create report.");
+      }
+
+      await response.json();
+
+      toast({ title: "Success", description: "PDF extracted and saved to Neon." });
       setFormData({
         company_id: "",
         report_year: new Date().getFullYear(),
@@ -232,12 +264,15 @@ const Reports = () => {
       setIsDialogOpen(false);
       await fetchData();
     } catch (error) {
+      console.error(error);
       toast({
         title: "Error",
         description:
-          error instanceof Error ? error.message : "Failed to add report",
+          error instanceof Error ? error.message : "Failed to create report.",
         variant: "destructive",
       });
+    } finally {
+      setIsAddingReport(false);
     }
   };
 
@@ -426,9 +461,9 @@ const Reports = () => {
                   )}
                 </div>
 
-                <Button type="submit" className="w-full gap-2">
+                <Button type="submit" className="w-full gap-2" disabled={isAddingReport}>
                   <Upload className="h-4 w-4" />
-                  Add Report
+                  {isAddingReport ? "Extracting and Saving..." : "Add Report"}
                 </Button>
               </form>
             </DialogContent>

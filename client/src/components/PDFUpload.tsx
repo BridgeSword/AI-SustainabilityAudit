@@ -1,5 +1,10 @@
 import { useState } from "react";
 
+const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE_URL = /localhost|127\.0\.0\.1/.test(rawApiBaseUrl)
+  ? ""
+  : rawApiBaseUrl.replace(/\/$/, "");
+
 export default function PDFUpload() {
   const [file, setFile] = useState<File | null>(null);
   const [reportId, setReportId] = useState("");
@@ -16,13 +21,10 @@ export default function PDFUpload() {
     const formData = new FormData();
     formData.append("file", file);
 
-    const res = await fetch(
-      `http://localhost:9092/pdf/v1/upload?report_id=${reportId}`,
-      {
-        method: "POST",
-        body: formData,
-      }
-    );
+    const res = await fetch(`${API_BASE_URL}/pdf/v1/upload?report_id=${reportId}`, {
+      method: "POST",
+      body: formData,
+    });
 
     const data = await res.json();
 
@@ -39,9 +41,7 @@ export default function PDFUpload() {
   const checkStatus = async () => {
     if (!jobId || !reportId) return;
 
-    const res = await fetch(
-      `http://localhost:9092/pdf/v1/jobs/${jobId}/status?report_id=${reportId}`
-    );
+    const res = await fetch(`${API_BASE_URL}/pdf/v1/jobs/${jobId}/status?report_id=${reportId}`);
     const data = await res.json();
 
     if (!res.ok) {

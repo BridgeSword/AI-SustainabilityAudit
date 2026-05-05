@@ -1,4 +1,7 @@
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:9092").replace(/\/$/, "");
+const rawApiBaseUrl = import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE_URL = /localhost|127\.0\.0\.1/.test(rawApiBaseUrl)
+  ? ""
+  : rawApiBaseUrl.replace(/\/$/, "");
 
 export interface ApiCompany {
   id: number;
