@@ -23,45 +23,54 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { ArrowUpDown, TrendingUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import SectorRankingChat from "@/components/sector-ranking/SectorRankingChat";
-import { listCompanies, listReports, type ApiCompany, type ApiReport } from "@/lib/api";
+import { fetchDemoReportsDataset, type ReportDataSource } from "@/data/demoReports";
+import { type MockReport } from "@/data/mockReports";
 
-type SortField = "name" | "industry" | "ghg_emissions" | "report_year";
+type SortField =
+  | "name"
+  | "industry"
+  | "esg_score"
+  | "ghg_emissions"
+  | "water_usage"
+  | "energy_consumption"
+  | "renewable_energy_percent"
+  | "waste_generated"
+  | "report_year";
 type SortDirection = "asc" | "desc";
-
-interface Company {
-  id: number;
-  name: string;
-  industry: string;
-  country: string;
-}
 
 interface Report {
   id: number;
   company_id: number;
+  company_name: string;
+  industry: string;
+  country: string;
   report_year: number;
-  ghg_emissions: number | null;
-  report_data: Record<string, unknown>;
-  company?: Company;
+  esg_score: number;
+  ghg_emissions: number;
+  water_usage: number;
+  energy_consumption: number;
+  renewable_energy_percent: number;
+  waste_generated: number;
+  anomalies: string[];
 }
 
-const normalizeCompany = (company: ApiCompany): Company => ({
-  id: company.id,
-  name: company.name,
-  industry: company.sector || "",
-  country: company.country || "",
+const normalizeReport = (report: MockReport): Report => ({
+  id: report.id,
+  company_id: report.companyId,
+  company_name: report.companyName,
+  industry: report.sector || "",
+  country: report.country || "",
+  report_year: report.year,
+  esg_score: report.esgScore,
+  ghg_emissions: report.carbonEmissions,
+  water_usage: report.waterUsage,
+  energy_consumption: report.energyConsumption ?? report.energyUsage,
+  renewable_energy_percent: report.renewableEnergyPercent ?? report.renewableEnergyPercentage,
+  waste_generated: report.wasteGenerated,
+  anomalies: report.anomalyNotes,
 });
 
-const normalizeReport = (report: ApiReport): Report | null => {
-  if (!report.company_id) return null;
-
-  return {
-    id: report.id,
-    company_id: report.company_id,
-    report_year: report.year,
-    ghg_emissions: Number(report.extracted_json?.ghg_emissions) || null,
-    report_data: report.extracted_json || {},
-  };
-};
+const formatNumber = (value: number) => value.toLocaleString();
 
 const SectorRanking = () => {
   const { toast } = useToast();
@@ -76,6 +85,7 @@ const SectorRanking = () => {
   const [sortField, setSortField] = useState<SortField>("ghg_emissions");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [currentPage, setCurrentPage] = useState(1);
+  const [dataSource, setDataSource] = useState<ReportDataSource>("Mock Demo Data");
   const itemsPerPage = 10;
 
   useEffect(() => {
@@ -92,35 +102,23 @@ const SectorRanking = () => {
     }
   }, []);
 
-  const { data: companies = [] } = useQuery({
-    queryKey: ["companies"],
-    queryFn: async () => (await listCompanies()).map(normalizeCompany),
-  });
-
   const { data: reports = [], isLoading } = useQuery({
-    queryKey: ["reports"],
-    queryFn: async () =>
-      (await listReports())
-        .map(normalizeReport)
-        .filter((report): report is Report => report !== null),
+    queryKey: ["demo-reports"],
+    queryFn: async () => {
+      const dataset = await fetchDemoReportsDataset();
+      setDataSource(dataset.source);
+      return dataset.reports.map(normalizeReport);
+    },
   });
-
-  const enrichedReports = useMemo(() => {
-    const companyMap = new Map(companies.map((company) => [company.id, company]));
-    return reports.map((report) => ({
-      ...report,
-      company: companyMap.get(report.company_id),
-    }));
-  }, [reports, companies]);
 
   const industries = useMemo(
-    () => Array.from(new Set(companies.map((company) => company.industry).filter(Boolean))),
-    [companies]
+    () => Array.from(new Set(reports.map((report) => report.industry).filter(Boolean))),
+    [reports]
   );
 
   const countries = useMemo(
-    () => Array.from(new Set(companies.map((company) => company.country).filter(Boolean))),
-    [companies]
+    () => Array.from(new Set(reports.map((report) => report.country).filter(Boolean))),
+    [reports]
   );
 
   const years = useMemo(
@@ -129,36 +127,30 @@ const SectorRanking = () => {
   );
 
   const filteredReports = useMemo(() => {
-    const filtered = enrichedReports.filter((report) => {
-      const company = report.company;
-      const companyName = company?.name || "";
-      const industry = company?.industry || "";
-      const country = company?.country || "";
-
-      return (
-        (!nameSearch || companyName.toLowerCase().includes(nameSearch.toLowerCase())) &&
-        (industryFilter === "all" || industry === industryFilter) &&
-        (countryFilter === "all" || country === countryFilter) &&
+    const filtered = reports.filter(
+      (report) =>
+        (!nameSearch || report.company_name.toLowerCase().includes(nameSearch.toLowerCase())) &&
+        (industryFilter === "all" || report.industry === industryFilter) &&
+        (countryFilter === "all" || report.country === countryFilter) &&
         (yearFilter === "all" || report.report_year === Number(yearFilter))
-      );
-    });
+    );
 
     filtered.sort((a, b) => {
       let aVal: string | number;
       let bVal: string | number;
 
       if (sortField === "name") {
-        aVal = a.company?.name || "";
-        bVal = b.company?.name || "";
+        aVal = a.company_name;
+        bVal = b.company_name;
       } else if (sortField === "industry") {
-        aVal = a.company?.industry || "";
-        bVal = b.company?.industry || "";
-      } else if (sortField === "ghg_emissions") {
-        aVal = a.ghg_emissions || 0;
-        bVal = b.ghg_emissions || 0;
-      } else {
+        aVal = a.industry;
+        bVal = b.industry;
+      } else if (sortField === "report_year") {
         aVal = a.report_year;
         bVal = b.report_year;
+      } else {
+        aVal = a[sortField];
+        bVal = b[sortField];
       }
 
       if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
@@ -168,7 +160,7 @@ const SectorRanking = () => {
 
     return filtered;
   }, [
-    enrichedReports,
+    reports,
     nameSearch,
     industryFilter,
     countryFilter,
@@ -227,12 +219,10 @@ const SectorRanking = () => {
       return;
     }
 
-    const selectedReports = enrichedReports.filter((report) =>
+    const selectedReports = reports.filter((report) =>
       selectedCompanyIds.includes(report.company_id)
     );
-    const reportsWithEmissions = selectedReports.filter(
-      (report) => report.ghg_emissions != null
-    );
+    const reportsWithEmissions = selectedReports.filter((report) => report.ghg_emissions > 0);
 
     if (reportsWithEmissions.length === 0) {
       toast({
@@ -244,17 +234,15 @@ const SectorRanking = () => {
     }
 
     const best = reportsWithEmissions.reduce((min, report) =>
-      (report.ghg_emissions || 0) < (min.ghg_emissions || 0) ? report : min
+      report.ghg_emissions < min.ghg_emissions ? report : min
     );
     const worst = reportsWithEmissions.reduce((max, report) =>
-      (report.ghg_emissions || 0) > (max.ghg_emissions || 0) ? report : max
+      report.ghg_emissions > max.ghg_emissions ? report : max
     );
 
     toast({
       title: "Comparison Result",
-      description: `Best: ${best.company?.name || "Unknown"} (${best.ghg_emissions} tCO2e). Worst: ${
-        worst.company?.name || "Unknown"
-      } (${worst.ghg_emissions} tCO2e).`,
+      description: `Best: ${best.company_name} (${best.ghg_emissions} tCO2e). Worst: ${worst.company_name} (${worst.ghg_emissions} tCO2e).`,
     });
   };
 
@@ -265,7 +253,7 @@ const SectorRanking = () => {
   };
 
   const externalContext = useMemo(() => {
-    const selected = enrichedReports.filter((report) =>
+    const selected = reports.filter((report) =>
       selectedCompanyIds.includes(report.company_id)
     );
 
@@ -279,16 +267,21 @@ const SectorRanking = () => {
         year: yearFilter,
       },
       selectedCompanies: selected.map((report) => ({
-        name: report.company?.name,
-        industry: report.company?.industry,
-        country: report.company?.country,
+        name: report.company_name,
+        industry: report.industry,
+        country: report.country,
         year: report.report_year,
         emissions: report.ghg_emissions,
+        esgScore: report.esg_score,
+        waterUsage: report.water_usage,
+        energyConsumption: report.energy_consumption,
+        renewableEnergyPercent: report.renewable_energy_percent,
+        wasteGenerated: report.waste_generated,
       })),
       baseline,
     };
   }, [
-    enrichedReports,
+    reports,
     selectedCompanyIds,
     nameSearch,
     industryFilter,
@@ -304,10 +297,17 @@ const SectorRanking = () => {
       <Navigation />
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
-          <h1 className="mb-2 text-3xl font-bold text-foreground">Sector analysis</h1>
-          <p className="text-muted-foreground">
-            Compare companies by emissions, select baselines, and analyze with AI.
-          </p>
+          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-start">
+            <div>
+              <h1 className="mb-2 text-3xl font-bold text-foreground">Sector analysis</h1>
+              <p className="text-muted-foreground">
+                Compare filtered companies across ESG score, emissions, water, energy, renewables, and waste.
+              </p>
+            </div>
+            <span className="w-fit rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
+              Data source: {dataSource}
+            </span>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -425,11 +425,42 @@ const SectorRanking = () => {
                       </Button>
                     </TableHead>
                     <TableHead>
+                      <Button variant="ghost" size="sm" onClick={() => handleSort("esg_score")}>
+                        ESG Score
+                        <ArrowUpDown className="ml-1 h-3 w-3" />
+                      </Button>
+                    </TableHead>
+                    <TableHead>
                       <Button variant="ghost" size="sm" onClick={() => handleSort("ghg_emissions")}>
                         Emissions (tCO2e)
                         <ArrowUpDown className="ml-1 h-3 w-3" />
                       </Button>
                     </TableHead>
+                    <TableHead>
+                      <Button variant="ghost" size="sm" onClick={() => handleSort("water_usage")}>
+                        Water (m3)
+                        <ArrowUpDown className="ml-1 h-3 w-3" />
+                      </Button>
+                    </TableHead>
+                    <TableHead>
+                      <Button variant="ghost" size="sm" onClick={() => handleSort("energy_consumption")}>
+                        Energy (MWh)
+                        <ArrowUpDown className="ml-1 h-3 w-3" />
+                      </Button>
+                    </TableHead>
+                    <TableHead>
+                      <Button variant="ghost" size="sm" onClick={() => handleSort("renewable_energy_percent")}>
+                        Renewable %
+                        <ArrowUpDown className="ml-1 h-3 w-3" />
+                      </Button>
+                    </TableHead>
+                    <TableHead>
+                      <Button variant="ghost" size="sm" onClick={() => handleSort("waste_generated")}>
+                        Waste (t)
+                        <ArrowUpDown className="ml-1 h-3 w-3" />
+                      </Button>
+                    </TableHead>
+                    <TableHead>Signals</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -451,11 +482,29 @@ const SectorRanking = () => {
                         <TableCell>
                           <Skeleton className="h-4 w-20" />
                         </TableCell>
+                        <TableCell>
+                          <Skeleton className="h-4 w-20" />
+                        </TableCell>
+                        <TableCell>
+                          <Skeleton className="h-4 w-20" />
+                        </TableCell>
+                        <TableCell>
+                          <Skeleton className="h-4 w-20" />
+                        </TableCell>
+                        <TableCell>
+                          <Skeleton className="h-4 w-20" />
+                        </TableCell>
+                        <TableCell>
+                          <Skeleton className="h-4 w-20" />
+                        </TableCell>
+                        <TableCell>
+                          <Skeleton className="h-4 w-20" />
+                        </TableCell>
                       </TableRow>
                     ))
                   ) : paginatedReports.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
+                      <TableCell colSpan={11} className="py-8 text-center text-muted-foreground">
                         No reports found matching your filters.
                       </TableCell>
                     </TableRow>
@@ -469,14 +518,28 @@ const SectorRanking = () => {
                           />
                         </TableCell>
                         <TableCell className="font-medium">
-                          {report.company?.name || "Unknown"}
+                          {report.company_name || "Unknown"}
                         </TableCell>
-                        <TableCell>{report.company?.industry || "-"}</TableCell>
+                        <TableCell>{report.industry || "-"}</TableCell>
                         <TableCell>{report.report_year}</TableCell>
+                        <TableCell>{report.esg_score || "-"}</TableCell>
                         <TableCell>
-                          {report.ghg_emissions != null
-                            ? report.ghg_emissions.toLocaleString()
-                            : "-"}
+                          {report.ghg_emissions ? formatNumber(report.ghg_emissions) : "-"}
+                        </TableCell>
+                        <TableCell>
+                          {report.water_usage ? formatNumber(report.water_usage) : "-"}
+                        </TableCell>
+                        <TableCell>
+                          {report.energy_consumption ? formatNumber(report.energy_consumption) : "-"}
+                        </TableCell>
+                        <TableCell>
+                          {report.renewable_energy_percent ? `${report.renewable_energy_percent}%` : "-"}
+                        </TableCell>
+                        <TableCell>
+                          {report.waste_generated ? formatNumber(report.waste_generated) : "-"}
+                        </TableCell>
+                        <TableCell>
+                          {report.anomalies.length > 0 ? `${report.anomalies.length} signal${report.anomalies.length === 1 ? "" : "s"}` : "-"}
                         </TableCell>
                       </TableRow>
                     ))
