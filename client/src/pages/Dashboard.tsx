@@ -38,8 +38,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { listCompanies, listReports } from "@/lib/api";
 import { mockCompanies, mockReports, type MockReport } from "@/data/mockReports";
+import { fetchDemoReportsDataset, type ReportDataSource } from "@/data/demoReports";
 
 interface Company {
   id: number;
@@ -49,55 +49,13 @@ interface Company {
 
 const formatNumber = (value: number) => value.toLocaleString();
 
-const reportFromApi = (
-  report: Awaited<ReturnType<typeof listReports>>[number],
-  company: Company
-): MockReport => {
-  const data = report.extracted_json || {};
-  const carbonEmissions = Number(data.ghg_emissions) || 0;
-  const waterUsage = Number(data.water_withdrawal_m3) || 0;
-  const energyUsage = Number(data.energy_consumption_mwh) || 0;
-  const renewableEnergyPercentage = Number(data.renewable_energy_percentage) || 0;
-  const wasteGenerated = Number(data.waste_generated_tonnes) || 0;
-
-  return {
-    id: report.id,
-    companyId: company.id,
-    companyName: company.name,
-    sector: company.industry || "Unspecified",
-    country: "",
-    year: report.year,
-    esgScore: Number(data.esg_score) || 0,
-    carbonEmissions,
-    waterUsage,
-    energyUsage,
-    renewableEnergyPercentage,
-    wasteGenerated,
-    anomalyNotes: Array.isArray(data.anomaly_notes)
-      ? data.anomaly_notes.map(String)
-      : [],
-    fileName: String(data.file_name || `Sustainability Report ${report.year}`),
-    timeSeries: [
-      {
-        year: report.year,
-        esgScore: Number(data.esg_score) || 0,
-        carbonEmissions,
-        waterUsage,
-        energyUsage,
-        renewableEnergyPercentage,
-        wasteGenerated,
-      },
-    ],
-  };
-};
-
 const Dashboard = () => {
   const { companyId } = useParams();
   const numericCompanyId = useMemo(() => Number(companyId || mockReports[0].companyId), [companyId]);
 
   const [company, setCompany] = useState<Company | null>(null);
   const [reports, setReports] = useState<MockReport[]>([]);
-  const [isMockData, setIsMockData] = useState(false);
+  const [dataSource, setDataSource] = useState<ReportDataSource>("Mock Demo Data");
 
   useEffect(() => {
     void fetchDashboardData();
@@ -112,46 +70,44 @@ const Dashboard = () => {
       industry: selected.sector,
     });
     setReports(mockReports.filter((report) => report.companyId === selected.companyId));
-    setIsMockData(true);
+    setDataSource("Mock Demo Data");
   };
 
   const fetchDashboardData = async () => {
-    try {
-      const [companiesData, reportsData] = await Promise.all([listCompanies(), listReports()]);
-      const normalizedCompanies = companiesData.map((item) => ({
-        id: item.id,
-        name: item.name,
-        industry: item.sector,
-      }));
-      const selectedCompany =
-        normalizedCompanies.find((item) => item.id === numericCompanyId) || null;
-      const targetReports = selectedCompany
-        ? reportsData
-            .filter((report) => report.company_id === selectedCompany.id)
-            .map((report) => reportFromApi(report, selectedCompany))
-        : [];
+    const dataset = await fetchDemoReportsDataset();
+    const selectedReport =
+      dataset.reports.find((report) => report.companyId === numericCompanyId) ||
+      dataset.reports[0];
 
-      if (!selectedCompany || targetReports.length === 0) {
-        useMockDashboard();
-        return;
-      }
-
-      setCompany(selectedCompany);
-      setReports(targetReports.sort((a, b) => b.year - a.year));
-      setIsMockData(false);
-    } catch {
+    if (!selectedReport) {
       useMockDashboard();
+      return;
     }
+
+    setCompany({
+      id: selectedReport.companyId,
+      name: selectedReport.companyName,
+      industry: selectedReport.sector,
+    });
+    setReports(
+      dataset.reports
+        .filter((report) => report.companyId === selectedReport.companyId)
+        .sort((a, b) => b.year - a.year)
+    );
+    setDataSource(dataset.source);
   };
 
   const latestReport = reports[0] || mockReports[0];
   const timeSeries = latestReport.timeSeries;
-  const peerComparison = mockReports.map((report) => ({
-    company: report.companyName,
-    esgScore: report.esgScore,
-    carbonEmissions: report.carbonEmissions,
-    renewableEnergyPercentage: report.renewableEnergyPercentage,
-  }));
+  const peerComparison =
+    latestReport.peerComparison && latestReport.peerComparison.length > 0
+      ? latestReport.peerComparison
+      : reports.map((report) => ({
+          company: report.companyName,
+          esgScore: report.esgScore,
+          carbonEmissions: report.carbonEmissions,
+          renewableEnergyPercentage: report.renewableEnergyPercentage,
+        }));
 
   const summaryCards = [
     {
@@ -202,11 +158,9 @@ const Dashboard = () => {
                   {company?.industry ? `${company.industry} sector ESG performance` : "ESG performance"}
                 </p>
               </div>
-              {isMockData && (
-                <span className="w-fit rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
-                  Demo data
-                </span>
-              )}
+              <span className="w-fit rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
+                Data source: {dataSource}
+              </span>
             </div>
 
             <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -285,7 +239,7 @@ const Dashboard = () => {
             <Card className="mb-6">
               <CardHeader>
                 <CardTitle>Report Table</CardTitle>
-                <CardDescription>Hardcoded demo reports with sustainability metrics</CardDescription>
+                <CardDescription>Sustainability metrics from the selected data source</CardDescription>
               </CardHeader>
               <CardContent>
                 <Table>
@@ -302,7 +256,7 @@ const Dashboard = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {mockReports.map((report) => (
+                    {reports.map((report) => (
                       <TableRow key={report.id}>
                         <TableCell className="font-medium">{report.companyName}</TableCell>
                         <TableCell>{report.year}</TableCell>

@@ -48,16 +48,12 @@ import {
 import {
   createReport,
   deleteReport,
-  listCompanies,
-  listReports,
   replacePdf,
   updateReport,
   uploadReportPdf,
   getPdfDownloadUrl,
-  type ApiCompany,
-  type ApiReport,
 } from "@/lib/api";
-import { mockCompanies, mockReports } from "@/data/mockReports";
+import { fetchDemoReportsDataset, type ReportDataSource } from "@/data/demoReports";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -82,6 +78,7 @@ interface ReportView {
   company_name: string;
   extraction_status: string | null;
   is_mock?: boolean;
+  is_neon?: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -95,6 +92,7 @@ const Reports = () => {
   /* ---- data ---- */
   const [companies, setCompanies] = useState<Company[]>([]);
   const [reports, setReports] = useState<ReportView[]>([]);
+  const [dataSource, setDataSource] = useState<ReportDataSource>("Mock Demo Data");
 
   /* ---- add report dialog ---- */
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -129,90 +127,32 @@ const Reports = () => {
   }, []);
 
   const fetchData = async () => {
-    try {
-      const [companiesData, reportsData] = await Promise.all([
-        listCompanies(),
-        listReports(),
-      ]);
+    const dataset = await fetchDemoReportsDataset();
+    const normalized = dataset.companies.map((c) => ({
+      id: c.id,
+      name: c.name,
+    }));
+    const normalizedReports = dataset.reports.map((r) => ({
+      id: r.id,
+      report_year: r.year,
+      file_name: r.fileName,
+      ghg_emissions: r.carbonEmissions,
+      esg_score: r.esgScore,
+      water_usage: r.waterUsage,
+      energy_usage: r.energyUsage,
+      renewable_energy_percentage: r.renewableEnergyPercentage,
+      waste_generated: r.wasteGenerated,
+      company_id: r.companyId,
+      company_name: r.companyName,
+      extraction_status: "completed",
+      is_mock: dataset.source === "Mock Demo Data",
+      is_neon: dataset.source === "Neon",
+    }));
 
-      const normalized = (companiesData.length > 0 ? companiesData : mockCompanies).map((c) => ({
-        id: c.id,
-        name: c.name,
-      }));
-      const map = new Map(normalized.map((c) => [c.id, c.name]));
-
-      setCompanies(normalized);
-      const normalizedReports =
-        reportsData.length > 0
-          ? reportsData.map((r) => ({
-          id: r.id,
-          report_year: r.year,
-          file_name:
-            (r.extracted_json?.file_name as string) || null,
-          ghg_emissions: Number(r.extracted_json?.ghg_emissions) || null,
-          esg_score: Number(r.extracted_json?.esg_score) || null,
-          water_usage: Number(r.extracted_json?.water_withdrawal_m3) || null,
-          energy_usage: Number(r.extracted_json?.energy_consumption_mwh) || null,
-          renewable_energy_percentage:
-            Number(r.extracted_json?.renewable_energy_percentage) || null,
-          waste_generated: Number(r.extracted_json?.waste_generated_tonnes) || null,
-          company_id: r.company_id,
-          company_name: r.company_id
-            ? map.get(r.company_id) || `Company #${r.company_id}`
-            : "Unknown Company",
-          extraction_status: r.extraction_status,
-        }))
-          : mockReports.map((r) => ({
-              id: r.id,
-              report_year: r.year,
-              file_name: r.fileName,
-              ghg_emissions: r.carbonEmissions,
-              esg_score: r.esgScore,
-              water_usage: r.waterUsage,
-              energy_usage: r.energyUsage,
-              renewable_energy_percentage: r.renewableEnergyPercentage,
-              waste_generated: r.wasteGenerated,
-              company_id: r.companyId,
-              company_name: r.companyName,
-              extraction_status: "completed",
-              is_mock: true,
-            }));
-
-      setReports(normalizedReports);
-
-      // Auto-expand all companies that have reports
-      const companiesWithReports = new Set(
-        normalizedReports
-          .map((r) => r.company_id)
-          .filter((id): id is number => id != null)
-      );
-      setExpandedCompanies(companiesWithReports);
-    } catch (error) {
-      const normalized = mockCompanies.map((c) => ({ id: c.id, name: c.name }));
-      const normalizedReports = mockReports.map((r) => ({
-        id: r.id,
-        report_year: r.year,
-        file_name: r.fileName,
-        ghg_emissions: r.carbonEmissions,
-        esg_score: r.esgScore,
-        water_usage: r.waterUsage,
-        energy_usage: r.energyUsage,
-        renewable_energy_percentage: r.renewableEnergyPercentage,
-        waste_generated: r.wasteGenerated,
-        company_id: r.companyId,
-        company_name: r.companyName,
-        extraction_status: "completed",
-        is_mock: true,
-      }));
-      setCompanies(normalized);
-      setReports(normalizedReports);
-      setExpandedCompanies(new Set(normalizedReports.map((report) => report.company_id || 0)));
-      toast({
-        title: "Demo data loaded",
-        description:
-          error instanceof Error ? `Backend unavailable: ${error.message}` : "Backend unavailable",
-      });
-    }
+    setDataSource(dataset.source);
+    setCompanies(normalized);
+    setReports(normalizedReports);
+    setExpandedCompanies(new Set(normalizedReports.map((report) => report.company_id || 0)));
   };
 
   /* ---- grouped by company ---- */
@@ -390,6 +330,9 @@ const Reports = () => {
               Upload and manage sustainability reports
             </p>
           </div>
+          <span className="rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
+            Data source: {dataSource}
+          </span>
 
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
@@ -549,7 +492,7 @@ const Reports = () => {
                               {report.report_year}
                             </TableCell>
                             <TableCell>
-                              {report.is_mock ? (
+                              {report.is_mock || report.is_neon ? (
                                 <span className="inline-flex items-center gap-1.5">
                                   <FileDown className="h-4 w-4 text-muted-foreground" />
                                   {report.file_name || "Demo Report"}
@@ -607,7 +550,7 @@ const Reports = () => {
                                   className="h-8 w-8 p-0"
                                   title="Edit report"
                                   onClick={() => openEdit(report)}
-                                  disabled={report.is_mock}
+                                  disabled={report.is_mock || report.is_neon}
                                 >
                                   <Pencil className="h-4 w-4" />
                                 </Button>
@@ -617,7 +560,7 @@ const Reports = () => {
                                   className="h-8 w-8 p-0 text-destructive hover:text-destructive"
                                   title="Delete report"
                                   onClick={() => openDelete(report)}
-                                  disabled={report.is_mock}
+                                  disabled={report.is_mock || report.is_neon}
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>

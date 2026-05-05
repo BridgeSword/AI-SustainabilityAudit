@@ -9,17 +9,28 @@ export interface MockReport {
   carbonEmissions: number;
   waterUsage: number;
   energyUsage: number;
+  energyConsumption?: number;
   renewableEnergyPercentage: number;
+  renewableEnergyPercent?: number;
   wasteGenerated: number;
   anomalyNotes: string[];
   fileName: string;
+  peerComparison?: Array<{
+    company: string;
+    esgScore: number;
+    carbonEmissions: number;
+    renewableEnergyPercentage: number;
+    renewableEnergyPercent?: number;
+  }>;
   timeSeries: Array<{
     year: number;
     esgScore: number;
     carbonEmissions: number;
     waterUsage: number;
     energyUsage: number;
+    energyConsumption?: number;
     renewableEnergyPercentage: number;
+    renewableEnergyPercent?: number;
     wasteGenerated: number;
   }>;
 }

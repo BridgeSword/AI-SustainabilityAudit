@@ -36,8 +36,6 @@ import SectorRankingChat from "@/components/sector-ranking/SectorRankingChat";
 import {
   createCompany,
   createReport,
-  listCompanies,
-  listReports,
   uploadReportPdf,
   getPdfDownloadUrl,
   fixStuckReport,
@@ -45,7 +43,8 @@ import {
   replacePdf,
   deleteReport,
 } from "@/lib/api";
-import { mockCompanies, mockReports, type MockReport } from "@/data/mockReports";
+import { type MockReport } from "@/data/mockReports";
+import { fetchDemoReportsDataset, type ReportDataSource } from "@/data/demoReports";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:9092").replace(/\/$/, "");
 
@@ -71,9 +70,10 @@ interface Report {
   renewable_energy_percentage?: number;
   waste_generated?: number;
   is_mock?: boolean;
+  is_neon?: boolean;
 }
 
-const mockReportToView = (report: MockReport): Report => ({
+const demoReportToView = (report: MockReport, source: ReportDataSource): Report => ({
   id: report.id,
   report_year: report.year,
   file_name: report.fileName,
@@ -87,7 +87,8 @@ const mockReportToView = (report: MockReport): Report => ({
   energy_usage: report.energyUsage,
   renewable_energy_percentage: report.renewableEnergyPercentage,
   waste_generated: report.wasteGenerated,
-  is_mock: true,
+  is_mock: source === "Mock Demo Data",
+  is_neon: source === "Neon",
   report_data: {
     file_name: report.fileName,
     esg_score: report.esgScore,
@@ -97,7 +98,9 @@ const mockReportToView = (report: MockReport): Report => ({
     waste_generated_tonnes: report.wasteGenerated,
     renewable_energy_percentage: report.renewableEnergyPercentage,
     anomaly_notes: report.anomalyNotes,
-    extraction_method: "Vercel demo mock data",
+    time_series: report.timeSeries,
+    peer_comparison: report.peerComparison,
+    extraction_method: source === "Neon" ? "Neon demo_reports" : "Vercel demo mock data",
   },
 });
 
@@ -108,6 +111,7 @@ const InnovativeActionDetect = () => {
   const { toast } = useToast();
 
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [dataSource, setDataSource] = useState<ReportDataSource>("Mock Demo Data");
   const [companySearch, setCompanySearch] = useState("");
   const [isLoadingCompanies, setIsLoadingCompanies] = useState(true);
   const [addCompanyOpen, setAddCompanyOpen] = useState(false);
@@ -165,86 +169,31 @@ const InnovativeActionDetect = () => {
 
   const fetchCompanies = async () => {
     setIsLoadingCompanies(true);
-    try {
-      const data = await listCompanies();
-      const source = data.length > 0 ? data : mockCompanies;
-      setCompanies(
-        source.map((c) => ({
-          id: c.id,
-          name: c.name,
-          industry: c.sector,
-        }))
-      );
-    } catch {
-      setCompanies(
-        mockCompanies.map((c) => ({
-          id: c.id,
-          name: c.name,
-          industry: c.sector,
-        }))
-      );
-      toast({
-        title: "Demo data loaded",
-        description: "Backend is unavailable, so sample ESG companies are shown.",
-      });
-    } finally {
-      setIsLoadingCompanies(false);
-    }
+    const dataset = await fetchDemoReportsDataset();
+    setDataSource(dataset.source);
+    setCompanies(
+      dataset.companies.map((c) => ({
+        id: c.id,
+        name: c.name,
+        industry: c.sector,
+      }))
+    );
+    setIsLoadingCompanies(false);
   };
 
   const fetchReports = async (id: number) => {
     setIsLoadingReports(true);
-    try {
-      const data = await listReports();
-      const filtered = data
-        .filter((r) => r.company_id === id)
-        .map((r) => ({
-          id: r.id,
-          report_year: r.year,
-          file_name: (r.extracted_json?.file_name as string) || `Report ${r.year}`,
-          company_id: r.company_id || id,
-          report_data: r.extracted_json,
-          extraction_status: r.extraction_status,
-          scoring_status: r.scoring_status,
-          anomaly_status: r.anomaly_status,
-          esg_score: Number(r.extracted_json?.esg_score) || undefined,
-          carbon_emissions: Number(r.extracted_json?.ghg_emissions) || undefined,
-          water_usage: Number(r.extracted_json?.water_withdrawal_m3) || undefined,
-          energy_usage: Number(r.extracted_json?.energy_consumption_mwh) || undefined,
-          renewable_energy_percentage:
-            Number(r.extracted_json?.renewable_energy_percentage) || undefined,
-          waste_generated: Number(r.extracted_json?.waste_generated_tonnes) || undefined,
-        }))
-        .sort((a, b) =>
-          sortAscending ? a.report_year - b.report_year : b.report_year - a.report_year
-        );
+    const dataset = await fetchDemoReportsDataset();
+    const filtered = dataset.reports
+      .filter((report) => report.companyId === id)
+      .map((report) => demoReportToView(report, dataset.source))
+      .sort((a, b) =>
+        sortAscending ? a.report_year - b.report_year : b.report_year - a.report_year
+      );
 
-      setReports(
-        filtered.length > 0
-          ? filtered
-          : mockReports
-              .filter((report) => report.companyId === id)
-              .map(mockReportToView)
-              .sort((a, b) =>
-                sortAscending ? a.report_year - b.report_year : b.report_year - a.report_year
-              )
-      );
-    } catch {
-      setReports(
-        mockReports
-          .filter((report) => report.companyId === id)
-          .map(mockReportToView)
-          .sort((a, b) =>
-            sortAscending ? a.report_year - b.report_year : b.report_year - a.report_year
-          )
-      );
-      toast({
-        title: "Demo reports loaded",
-        description: "Backend is unavailable, so sample ESG reports are shown.",
-      });
-    } finally {
-      setIsLoadingReports(false);
-    }
+    setDataSource(dataset.source);
+    setReports(filtered);
+    setIsLoadingReports(false);
   };
 
   const handleAddCompany = async () => {
@@ -507,6 +456,9 @@ const InnovativeActionDetect = () => {
                   <h1 className="text-3xl font-bold text-foreground">
                     Report analysis
                   </h1>
+                  <span className="rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
+                    Data source: {dataSource}
+                  </span>
 
                   <Dialog open={addCompanyOpen} onOpenChange={setAddCompanyOpen}>
                     <DialogTrigger asChild>
@@ -598,6 +550,9 @@ const InnovativeActionDetect = () => {
                     <h1 className="text-3xl font-bold text-foreground">
                       {selectedCompany?.name || "Company"} Reports
                     </h1>
+                    <span className="mt-2 inline-flex rounded-full bg-accent px-3 py-1 text-sm font-medium text-accent-foreground">
+                      Data source: {dataSource}
+                    </span>
                   </div>
 
                   <Button
@@ -681,7 +636,7 @@ const InnovativeActionDetect = () => {
                                 {report.report_year}
                               </TableCell>
                               <TableCell>
-                                {report.is_mock ? (
+                                {report.is_mock || report.is_neon ? (
                                   <span className="inline-flex items-center gap-1 text-foreground">
                                     <FileDown className="h-4 w-4 text-muted-foreground" />
                                     {report.file_name || "Demo Report"}
@@ -765,7 +720,7 @@ const InnovativeActionDetect = () => {
                                     className="h-8 w-8 p-0"
                                     title="Edit report"
                                     onClick={() => openEdit(report)}
-                                    disabled={report.is_mock}
+                                    disabled={report.is_mock || report.is_neon}
                                   >
                                     <Pencil className="h-4 w-4" />
                                   </Button>
@@ -775,7 +730,7 @@ const InnovativeActionDetect = () => {
                                     className="h-8 w-8 p-0 text-destructive hover:text-destructive"
                                     title="Delete report"
                                     onClick={() => openDelete(report)}
-                                    disabled={report.is_mock}
+                                    disabled={report.is_mock || report.is_neon}
                                   >
                                     <Trash2 className="h-4 w-4" />
                                   </Button>
